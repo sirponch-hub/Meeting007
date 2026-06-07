@@ -46,14 +46,14 @@ Remind the user to consider extra skills or MCP/connectors when these moments ar
 
 ## Copy Last 5 Minutes
 
-- Status: Ready for Review
+- Status: Done
 - Owner: Codex + BA/UX/QA agents
 - User outcome: During a meeting, the user can copy recent transcript context without stopping recording or leaving the transcript surface.
 - Scope: Visible `Copy Last 5 Minutes` control in the transcript panel, 5-minute transcript window formatting, metadata header, `(live)` marker for partial lines, macOS clipboard write, copy confirmation/failure message, disabled state before transcript text exists, local mock transcript source only.
 - Out of scope: Hotkey/menu bar copy actions, Copy Full Transcript, real microphone/system audio capture, real STT, Markdown/SQLite persistence, REST/MCP exposure, telemetry, cloud access.
 - Docs touched: `docs/product/user-steps.md`, `docs/product/prioritized-backlog.md`, `docs/testing.md`, `docs/workstreams.md`.
-- Verification: `swift run Meeting007CoreChecks` passed; `swift build --product Meeting007App` passed.
-- Gates: BA accepted scope and implementation; UX accepted visible transcript-header control, disabled state, metadata payload, and feedback; QA accepted core coverage and scoped residual risk; user acceptance pending; merge pending.
+- Verification: `swift run Meeting007CoreChecks` passed; `swift build --product Meeting007App` passed after merge to `main`.
+- Gates: BA accepted scope and implementation; UX accepted visible transcript-header control, disabled state, metadata payload, and feedback; QA accepted core coverage and scoped residual risk; user accepted; merge complete.
 - Open decisions: Full transcript copy and hotkey/menu bar copy actions remain later backlog items.
 - Handoff notes: This first slice copies from the local preview transcript, not real audio transcription.
 
