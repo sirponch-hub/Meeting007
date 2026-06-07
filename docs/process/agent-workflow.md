@@ -253,6 +253,12 @@ Merge rule:
 
 - `main` contains only accepted, tested, documented increments.
 
+Final response rule:
+
+- After an accepted workstream is merged and verified on `main`, the user-facing closeout must include the top 3 next backlog options.
+- Each option should be phrased as a user outcome, not a technical task.
+- Include the recommended next option when one is clearly the best product path.
+
 ## Role Files
 
 Reusable role prompts live in `docs/agents/`:

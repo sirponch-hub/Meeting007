@@ -12,6 +12,7 @@ Delivery gates and agent roles are defined in `docs/process/agent-workflow.md`.
 - Keep status current when a workstream starts, changes direction, is blocked, or completes.
 - Do not mark work ready for `main` until verification is documented.
 - Revisit skills/MCP needs when a workstream reaches one of the tooling triggers below.
+- After an accepted workstream is merged to `main`, show the user the top 3 next backlog options so they can choose the next step.
 
 ## Tooling Triggers
 

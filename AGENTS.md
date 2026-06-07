@@ -30,6 +30,7 @@ These rules apply to all AI-assisted work in this repository. Reusable role prom
 - Do not assume the user wants low-level implementation detail unless it affects product behavior, privacy, cost, speed, reliability, or future parallel work.
 - For user-facing changes, explain choices through convenience, clarity, speed during meetings, trust, privacy, and recovery.
 - Keep decisions documented so another engineer or agent can continue without rediscovering context.
+- After user acceptance, merge, and final verification, always present the user with the top 3 next backlog options in business language so they can choose the next step.
 
 ## Privacy And Security Rules
 
