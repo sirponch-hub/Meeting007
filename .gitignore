@@ -1,0 +1,26 @@
+.build/
+.swiftpm/
+DerivedData/
+
+# Local app data
+Meeting007Data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Sensitive local media and transcripts
+Recordings/
+Transcripts/
+*.wav
+*.m4a
+*.mp3
+*.mp4
+
+# Local secrets
+.env
+*.key
+*.token
+
+# macOS
+.DS_Store
+

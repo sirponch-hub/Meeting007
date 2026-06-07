@@ -1,0 +1,274 @@
+# Agent Workflow
+
+This workflow defines how Meeting007 work moves from business intent to `main`. It is designed for parallel AI-assisted development while keeping product decisions, architecture, tests, and user acceptance visible.
+
+## Recommended Flow
+
+The user's proposed flow is strong. The improvement is to add an explicit intake step and a release-captain gate before merge. That keeps parallel work coordinated and prevents branches from reaching `main` with missing documentation, tests, or acceptance.
+
+```mermaid
+flowchart TD
+    Intake["0. Intake / Workstream Setup"] --> BA["1. Business Analyst"]
+    BA --> BAGate{"Business Requirements Agreed?"}
+    BAGate -- No --> BA
+    BAGate -- Yes --> UX["2. UX Designer"]
+    UX --> UXGate{"UX Needed / Approved?"}
+    UXGate -- No --> SA["3. System Analyst / Architect"]
+    UXGate -- Yes --> SA
+    SA --> Expert["3a. Specialist Reviews When Needed"]
+    Expert --> ArchGate{"Architecture Consistent + Specialist Gates Clear?"}
+    ArchGate -- No --> SA
+    ArchGate -- Yes --> QA["4. Acceptance Tester"]
+    QA --> TestGate{"Acceptance Tests Defined?"}
+    TestGate -- No --> QA
+    TestGate -- Yes --> Dev["5. Developer Branch + TDD/BDD"]
+    Dev --> IT["6. Integration Tests"]
+    IT --> DevGate{"Automated Verification Passed?"}
+    DevGate -- No --> Dev
+    DevGate -- Yes --> BAAccept["7. BA + UX Acceptance"]
+    BAAccept --> UserAccept["8. User Acceptance"]
+    UserAccept --> ReleaseGate{"User Accepted + Merge Gate Clean?"}
+    ReleaseGate -- No --> Dev
+    ReleaseGate -- Yes --> Merge["9. Merge To main"]
+```
+
+## 0. Intake / Workstream Setup
+
+Purpose: create a shared work container before roles start working.
+
+Required outputs:
+
+- Workstream entry in `docs/workstreams.md`.
+- User outcome stated in business language.
+- Scope and out-of-scope.
+- Target backlog priority from `docs/product/prioritized-backlog.md`.
+- Owner/agent roles assigned.
+
+Gate:
+
+- Work does not start until the user outcome and expected acceptance path are clear.
+
+## 1. Business Analyst
+
+Purpose: clarify what the user needs and convert it into business-level backlog detail.
+
+Required outputs:
+
+- Updated business requirements or user steps.
+- Acceptance criteria in user-visible language.
+- Open product decisions documented.
+- Dependencies and priority confirmed.
+
+Gate:
+
+- No architecture or coding starts until the affected user workflow and acceptance criteria are explicit.
+
+Communication rule:
+
+- Ask about user outcomes, workflow, privacy, reliability, and acceptance. Avoid raw technical questions unless translated into user experience impact.
+
+## 2. UX Designer
+
+Purpose: make user-facing work convenient, calm, fast, and trustworthy before architecture and development harden the experience.
+
+Use this role when the change affects:
+
+- First launch, setup, permissions, recording screen, transcript view, meeting history, settings, error/recovery UX, copy controls, menu bar, hotkeys, API/MCP enablement screens, or user acceptance instructions.
+
+Required outputs:
+
+- User flow in business language.
+- Screen/state inventory: empty, loading, active, success, error, blocked, permission-denied.
+- Interaction model: primary action, secondary actions, hotkeys/menu bar behavior when relevant.
+- UX acceptance criteria.
+- Copy/microcopy for sensitive moments such as permissions, local-only privacy, recording state, and errors.
+- Accessibility and keyboard expectations.
+- Visual constraints for developer implementation.
+
+Gate:
+
+- UI-affecting development does not start until the target experience, states, and acceptance criteria are documented.
+- Backend-only work may skip UX design, but the workstream must explicitly say UX is not affected.
+
+Design rule:
+
+- Meeting007 is a work surface, not a marketing site. Optimize for clarity, repeated use, low meeting-time friction, and confidence that data stays local.
+
+## 3. System Analyst / Architect
+
+Purpose: translate agreed business requirements into technical and architectural requirements.
+
+Required outputs:
+
+- Architecture changes or confirmation that existing architecture covers the work.
+- Data flow, interfaces, module boundaries, and failure modes.
+- Privacy/security impact.
+- ADR for significant decisions.
+- Technical acceptance criteria for implementation.
+
+Gate:
+
+- No coding starts until architecture impact is documented and consistent with local-first constraints.
+
+## 3a. Specialist Reviews When Needed
+
+Purpose: reduce the highest product risks before acceptance tests and implementation start.
+
+Use specialist agents when a workstream touches their risk area:
+
+- macOS Audio/Capture Specialist: microphone capture, system audio, ScreenCaptureKit, permissions, latency, Zoom/Meet/Teams/Slack behavior.
+- Local STT / ML Engineer: local Russian transcription, VAD, partial/final segments, model installation, Apple Silicon performance.
+- Security & Privacy Reviewer: local-only behavior, tokens, logs, raw audio/transcript handling, REST/MCP exposure.
+- QA Automation Engineer: test harnesses, fixtures, BDD automation, deterministic fake audio/transcript flows.
+- CI / Build Engineer: branch protection, CI commands, build reproducibility, release packaging, notarization planning.
+- Performance Reviewer: latency, CPU/RAM/battery, UI responsiveness during recording/transcription.
+- Technical Writer / Docs Keeper: documentation completeness, handoff clarity, user acceptance instructions.
+- Dogfood / User Research Agent: real personal workflow checks and post-acceptance friction notes.
+
+Required outputs:
+
+- Specialist risk assessment.
+- Required tests or manual QA.
+- Go/no-go recommendation.
+- Documentation or ADR requirements.
+
+Gate:
+
+- If a specialist marks a blocking risk, the workstream cannot proceed to development until the risk is resolved or explicitly deferred outside `main`.
+
+## 4. Acceptance Tester
+
+Purpose: define high-level acceptance tests before implementation.
+
+Required outputs:
+
+- Acceptance scenarios in business-readable Given/When/Then form.
+- Manual QA checklist updates when the change affects UX, permissions, capture, API, MCP, storage, or privacy.
+- Automated test expectations for the developer.
+
+Gate:
+
+- Developer does not start implementation until top-level acceptance scenarios exist.
+
+## 5. Developer Branch + TDD/BDD
+
+Purpose: implement the smallest safe increment on a branch.
+
+Rules:
+
+- Create a feature branch before code changes.
+- Use TDD/BDD: write or update checks that express expected behavior before or alongside implementation.
+- Keep changes scoped to the approved workstream.
+- Do not merge untested work into `main`.
+- Do not revert unrelated user or agent changes.
+
+Required outputs:
+
+- Code changes.
+- Automated checks.
+- Updated docs.
+- Branch notes in `docs/workstreams.md`.
+
+Gate:
+
+- Branch is not ready until local verification passes or missing test infrastructure is documented and the work is explicitly marked not ready for `main`.
+
+## 6. Integration Tests
+
+Purpose: prove changed parts work together.
+
+Required checks:
+
+- Existing verification command, currently `swift run Meeting007CoreChecks`.
+- Integration tests relevant to the workstream.
+- Manual QA where automation is not enough.
+
+For Meeting007, integration testing should eventually cover:
+
+- Capture lane to transcript segment.
+- Segment to Markdown and SQLite.
+- SQLite to app view, REST, and MCP.
+- Permission denial and recovery.
+- Local-only behavior.
+
+Gate:
+
+- Integration failures return the branch to the developer.
+
+## 7. Business Analyst + UX Acceptance
+
+Purpose: confirm the delivered behavior still matches the agreed business requirement.
+
+Required outputs:
+
+- BA acceptance note in PR or workstream.
+- UX acceptance note when the change affects visible user experience.
+- Confirmation that acceptance criteria are met or list of gaps.
+- Confirmation that documentation matches delivered behavior.
+
+Gate:
+
+- User acceptance is not requested until BA acceptance is complete and UX acceptance is complete for user-facing changes.
+
+## 8. User Acceptance
+
+Purpose: let the user make the final product decision before merge.
+
+Required user-facing instructions:
+
+- Where to look: files, screen, app area, API endpoint, or output artifact.
+- What to check: exact user workflow and expected result.
+- How to run: commands, app launch steps, or manual QA steps.
+- What is not included: explicit scope boundaries for this increment.
+- Known risks or limitations.
+
+Allowed outcomes:
+
+- `Accepted`: can merge to `main`.
+- `Accepted with Follow-ups`: can merge; follow-ups become backlog items.
+- `Rejected`: cannot merge; return to developer.
+- `Blocked`: cannot merge until the environment, instructions, build, permissions, or hardware blocker is resolved.
+
+Gate:
+
+- Branch cannot merge until the user explicitly accepts the result or explicitly delegates acceptance.
+
+## 9. Release Captain / Merge To main
+
+Purpose: protect `main`.
+
+Required before merge:
+
+- User acceptance received.
+- Automated verification passed.
+- Required manual QA completed or marked not required.
+- BA acceptance completed.
+- UX acceptance completed or marked not applicable.
+- Business and architecture docs updated.
+- Workstream updated.
+- PR checklist complete.
+- No private audio, transcripts, local databases, tokens, model files, or build outputs committed.
+
+Merge rule:
+
+- `main` contains only accepted, tested, documented increments.
+
+## Role Files
+
+Reusable role prompts live in `docs/agents/`:
+
+- `docs/agents/business-analyst.md`
+- `docs/agents/ux-designer.md`
+- `docs/agents/system-architect.md`
+- `docs/agents/macos-audio-specialist.md`
+- `docs/agents/local-stt-engineer.md`
+- `docs/agents/security-privacy-reviewer.md`
+- `docs/agents/qa-automation-engineer.md`
+- `docs/agents/ci-build-engineer.md`
+- `docs/agents/performance-reviewer.md`
+- `docs/agents/technical-writer.md`
+- `docs/agents/dogfood-user-researcher.md`
+- `docs/agents/acceptance-tester.md`
+- `docs/agents/developer.md`
+- `docs/agents/integration-tester.md`
+- `docs/agents/release-captain.md`
