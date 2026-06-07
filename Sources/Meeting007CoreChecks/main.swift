@@ -18,6 +18,13 @@ struct Meeting007CoreChecks {
         await checkLiveTranscriptPreviewEmitsRussianSegments()
         await checkLiveTranscriptPreviewReplacesPartialWithFinal()
         await checkLiveTranscriptPreviewStopDisablesFurtherUpdates()
+        checkCompletedSessionRequiresEndedSession()
+        await checkStopSavesCompletedSessionToHistory()
+        await checkRepeatedStopDoesNotDuplicateSavedSession()
+        await checkMultipleCompletedSessionsRemainInHistory()
+        await checkStopWhileIdleDoesNotSaveHistoryItem()
+        await checkStartAfterStopKeepsPreviousHistory()
+        await checkHistoryUsesInMemoryStoreOnly()
         print("Meeting007CoreChecks passed")
     }
 
@@ -258,6 +265,212 @@ struct Meeting007CoreChecks {
 
         require(!isActive, "Preview should not remain active after stop.")
         require(stoppedSegments == firstSegments, "Preview stop must prevent further fake segment updates.")
+    }
+
+    private static func checkCompletedSessionRequiresEndedSession() {
+        var session = RecordingSession(id: UUID(), title: "Incomplete")
+        session.markStarted(at: Date(timeIntervalSince1970: 10))
+        let transcript = MeetingTranscript(meetingID: session.id)
+
+        let completedSession = CompletedRecordingSession(session: session, transcript: transcript)
+
+        require(completedSession == nil, "Completed session snapshots must require an ended recording session.")
+    }
+
+    private static func checkStopSavesCompletedSessionToHistory() async {
+        var dates = [
+            Date(timeIntervalSince1970: 100),
+            Date(timeIntervalSince1970: 145)
+        ]
+        let controller = RecordingSessionController(clock: { dates.removeFirst() })
+        let store = InMemoryRecordingSessionStore()
+
+        _ = await controller.startManualRecording(title: "История встречи")
+        let meetingID = await controller.currentSession()?.id
+        let state = await controller.stopManualRecording()
+        guard let session = await controller.currentSession(), let meetingID else {
+            require(false, "Stopped recording must keep the session available for snapshot creation.")
+            return
+        }
+
+        let transcript = MeetingTranscript(meetingID: meetingID, segments: [
+            TranscriptSegment(
+                meetingID: meetingID,
+                lane: .me,
+                state: .final,
+                startTime: 2,
+                endTime: 6,
+                text: "Готово"
+            )
+        ])
+        guard let completedSession = CompletedRecordingSession(
+            session: session,
+            transcript: transcript,
+            note: "Локальная заметка",
+            completedAt: Date(timeIntervalSince1970: 150)
+        ) else {
+            require(false, "Stopped recording must create a completed session snapshot.")
+            return
+        }
+
+        if state == .stopped {
+            await store.save(completedSession)
+        }
+
+        let recent = await store.recentSessions(limit: 10)
+        require(recent.count == 1, "Stop must save exactly one completed session to in-memory history.")
+        require(recent.first?.title == "История встречи", "Completed session history must keep the meeting title.")
+        require(recent.first?.duration == 45, "Completed session history must keep the recording duration.")
+        require(recent.first?.note == "Локальная заметка", "Completed session history must keep the quick note.")
+        require(recent.first?.finalSegmentCount == 1, "Completed session history must keep transcript metadata.")
+    }
+
+    private static func checkRepeatedStopDoesNotDuplicateSavedSession() async {
+        var session = RecordingSession(id: UUID(), title: "No Duplicate")
+        session.markStarted(at: Date(timeIntervalSince1970: 10))
+        session.markEnded(at: Date(timeIntervalSince1970: 20))
+        let transcript = MeetingTranscript(meetingID: session.id)
+        let store = InMemoryRecordingSessionStore()
+        guard let firstSnapshot = CompletedRecordingSession(
+            session: session,
+            transcript: transcript,
+            note: "first",
+            completedAt: Date(timeIntervalSince1970: 20)
+        ), let secondSnapshot = CompletedRecordingSession(
+            session: session,
+            transcript: transcript,
+            note: "second",
+            completedAt: Date(timeIntervalSince1970: 25)
+        ) else {
+            require(false, "Ended sessions must create snapshots for duplicate-save checks.")
+            return
+        }
+
+        await store.save(firstSnapshot)
+        await store.save(secondSnapshot)
+
+        let recent = await store.recentSessions(limit: 10)
+        require(recent.count == 1, "Saving the same completed session twice must replace instead of duplicating.")
+        require(recent.first?.note == "second", "Duplicate save must keep the latest snapshot.")
+    }
+
+    private static func checkMultipleCompletedSessionsRemainInHistory() async {
+        let store = InMemoryRecordingSessionStore()
+        let older = makeCompletedSession(
+            title: "Older",
+            startedAt: Date(timeIntervalSince1970: 10),
+            endedAt: Date(timeIntervalSince1970: 20)
+        )
+        let newer = makeCompletedSession(
+            title: "Newer",
+            startedAt: Date(timeIntervalSince1970: 30),
+            endedAt: Date(timeIntervalSince1970: 50)
+        )
+
+        await store.save(older)
+        await store.save(newer)
+
+        let recent = await store.recentSessions(limit: 10)
+        require(recent.map(\.title) == ["Newer", "Older"], "Completed session history must keep all sessions newest first.")
+
+        let limited = await store.recentSessions(limit: 1)
+        require(limited.map(\.title) == ["Newer"], "Completed session history must respect the requested limit.")
+    }
+
+    private static func checkStopWhileIdleDoesNotSaveHistoryItem() async {
+        let controller = RecordingSessionController()
+        let store = InMemoryRecordingSessionStore()
+
+        let state = await controller.stopManualRecording()
+        if state == .stopped, let session = await controller.currentSession() {
+            let transcript = MeetingTranscript(meetingID: session.id)
+            if let completedSession = CompletedRecordingSession(session: session, transcript: transcript) {
+                await store.save(completedSession)
+            }
+        }
+
+        let recent = await store.recentSessions(limit: 10)
+        require(recent.isEmpty, "Stop while idle must not save a completed session.")
+    }
+
+    private static func checkStartAfterStopKeepsPreviousHistory() async {
+        var dates = [
+            Date(timeIntervalSince1970: 100),
+            Date(timeIntervalSince1970: 120),
+            Date(timeIntervalSince1970: 200)
+        ]
+        let controller = RecordingSessionController(clock: { dates.removeFirst() })
+        let store = InMemoryRecordingSessionStore()
+
+        _ = await controller.startManualRecording(title: "First")
+        _ = await controller.stopManualRecording()
+        guard let firstSession = await controller.currentSession(),
+              let firstCompleted = CompletedRecordingSession(
+                session: firstSession,
+                transcript: MeetingTranscript(meetingID: firstSession.id)
+              ) else {
+            require(false, "First stopped recording must create a completed snapshot.")
+            return
+        }
+        await store.save(firstCompleted)
+
+        _ = await controller.startManualRecording(title: "Second")
+
+        let recent = await store.recentSessions(limit: 10)
+        let activeSession = await controller.currentSession()
+        require(recent.map(\.title) == ["First"], "Starting a new recording must not erase completed history.")
+        require(activeSession?.title == "Second", "Second recording must become the active session.")
+    }
+
+    private static func checkHistoryUsesInMemoryStoreOnly() async {
+        let store = InMemoryRecordingSessionStore()
+        let completedSession = makeCompletedSession(
+            title: "Runtime Only",
+            startedAt: Date(timeIntervalSince1970: 10),
+            endedAt: Date(timeIntervalSince1970: 40)
+        )
+
+        await store.save(completedSession)
+
+        let saved = await store.session(id: completedSession.id)
+        let emptyFreshStore = await InMemoryRecordingSessionStore().recentSessions(limit: 10)
+
+        require(saved?.title == "Runtime Only", "In-memory store must return saved sessions during the app run.")
+        require(emptyFreshStore.isEmpty, "A fresh in-memory store must not contain prior sessions.")
+    }
+
+    private static func makeCompletedSession(title: String, startedAt: Date, endedAt: Date) -> CompletedRecordingSession {
+        var session = RecordingSession(id: UUID(), title: title)
+        session.markStarted(at: startedAt)
+        session.markEnded(at: endedAt)
+        let transcript = MeetingTranscript(meetingID: session.id, segments: [
+            TranscriptSegment(
+                meetingID: session.id,
+                lane: .others,
+                state: .final,
+                startTime: 1,
+                endTime: 2,
+                text: "Русский сегмент"
+            ),
+            TranscriptSegment(
+                meetingID: session.id,
+                lane: .me,
+                state: .partial,
+                startTime: 3,
+                endTime: 4,
+                text: "Черновик"
+            )
+        ])
+
+        guard let completedSession = CompletedRecordingSession(
+            session: session,
+            transcript: transcript,
+            completedAt: endedAt
+        ) else {
+            fatalError("Test fixture must create a valid completed session.")
+        }
+
+        return completedSession
     }
 
     private static func require(_ condition: @autoclosure () -> Bool, _ message: String) {

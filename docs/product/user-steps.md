@@ -109,6 +109,14 @@ Placeholder implementation slice:
   - The app remains responsive during finalization.
   - Hotkey and menu bar stop are not required for the first implementation slice.
 
+Completed-session implementation slice:
+
+- After Stop, the app creates a local in-memory completed-session snapshot for the current app run.
+- The completed snapshot includes title, start/end time, duration, primary language, quick note, and transcript preview metadata.
+- The latest completed session appears in the main work area, and completed recordings appear in a left-side "Recent recordings" tree.
+- Multiple completed recordings remain visible newest first until the app closes.
+- This slice does not create Markdown files, SQLite records, REST/MCP access, audio files, or durable history.
+
 ## Step 9: Save Final Transcript
 
 - User goal: keep the meeting transcript as a file the user owns.
@@ -120,6 +128,11 @@ Placeholder implementation slice:
   - Transcript includes timestamps, speaker labels, title, start time, and language.
   - SQLite index contains matching meeting and segment data.
   - No cloud upload is required.
+
+Current status:
+
+- Durable Markdown/SQLite saving is still a future slice.
+- The current app can show completed recordings only for the active app process.
 
 ## Step 10: Find Past Meetings
 

@@ -21,18 +21,22 @@ final class RecordingShellViewModel: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var previewSegments: [TranscriptSegment] = []
     @Published private(set) var hasStartedPreview = false
+    @Published private(set) var recentSessions: [CompletedRecordingSession] = []
 
     private let controller: RecordingSessionController
     private let transcriptPreviewController: LiveTranscriptPreviewController
+    private let recordingStore: any RecordingSessionStore
     private var timer: Timer?
     private var transcriptPreviewTimer: Timer?
 
     init(
         controller: RecordingSessionController = RecordingSessionController(),
-        transcriptPreviewController: LiveTranscriptPreviewController = LiveTranscriptPreviewController()
+        transcriptPreviewController: LiveTranscriptPreviewController = LiveTranscriptPreviewController(),
+        recordingStore: any RecordingSessionStore = InMemoryRecordingSessionStore()
     ) {
         self.controller = controller
         self.transcriptPreviewController = transcriptPreviewController
+        self.recordingStore = recordingStore
     }
 
     var statusText: String {
@@ -69,6 +73,10 @@ final class RecordingShellViewModel: ObservableObject {
         meetingTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Untitled meeting" : meetingTitle
     }
 
+    var lastCompletedSession: CompletedRecordingSession? {
+        recentSessions.first
+    }
+
     func primaryAction() {
         if state.isRecording {
             stop()
@@ -101,9 +109,12 @@ final class RecordingShellViewModel: ObservableObject {
         stopTranscriptPreviewTimer()
 
         Task {
+            let frozenSegments = await transcriptPreviewController.visibleSegments()
             await transcriptPreviewController.stop()
+            previewSegments = frozenSegments
             let nextState = await controller.stopManualRecording()
             apply(nextState)
+            await saveCompletedSessionIfNeeded(state: nextState, segments: frozenSegments)
         }
     }
 
@@ -163,6 +174,25 @@ final class RecordingShellViewModel: ObservableObject {
         transcriptPreviewTimer = nil
     }
 
+    private func saveCompletedSessionIfNeeded(state: RecordingState, segments: [TranscriptSegment]) async {
+        guard state == .stopped,
+              let session = await controller.currentSession() else {
+            return
+        }
+
+        let transcript = MeetingTranscript(meetingID: session.id, segments: segments)
+        guard let completedSession = CompletedRecordingSession(
+            session: session,
+            transcript: transcript,
+            note: quickNote
+        ) else {
+            return
+        }
+
+        await recordingStore.save(completedSession)
+        recentSessions = await recordingStore.recentSessions(limit: 8)
+    }
+
     private func updateElapsed() {
         Task {
             await updateElapsedFromController()
@@ -184,18 +214,29 @@ struct RecordingShellView: View {
     @ObservedObject var viewModel: RecordingShellViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            header
-            meetingFields
-            recordingPanel
-            TranscriptPanel(
-                state: viewModel.state,
-                hasStartedPreview: viewModel.hasStartedPreview,
-                segments: viewModel.previewSegments
-            )
-            Spacer(minLength: 0)
+        HStack(spacing: 0) {
+            RecentRecordingsSidebar(sessions: viewModel.recentSessions)
+                .frame(width: 260)
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    header
+                    meetingFields
+                    recordingPanel
+                    TranscriptPanel(
+                        state: viewModel.state,
+                        hasStartedPreview: viewModel.hasStartedPreview,
+                        segments: viewModel.previewSegments
+                    )
+                    if let lastCompletedSession = viewModel.lastCompletedSession {
+                        CompletedSessionSummary(session: lastCompletedSession)
+                    }
+                }
+                .padding(28)
+            }
         }
-        .padding(28)
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
@@ -269,6 +310,155 @@ struct RecordingShellView: View {
         }
     }
 
+}
+
+struct CompletedSessionSummary: View {
+    let session: CompletedRecordingSession
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Session completed")
+                        .font(.headline)
+                    Text(session.title)
+                        .font(.title3.weight(.semibold))
+                }
+
+                Spacer()
+
+                Text(TimestampFormatter.format(session.duration))
+                    .font(.system(.title3, design: .monospaced).weight(.semibold))
+                    .accessibilityLabel("Completed recording duration \(TimestampFormatter.format(session.duration))")
+            }
+
+            LazyVGrid(columns: [
+                GridItem(.adaptive(minimum: 150), alignment: .leading)
+            ], alignment: .leading, spacing: 10) {
+                CompletedSessionMetric(label: "Started", value: session.startedAt?.formatted(date: .omitted, time: .shortened) ?? "Unknown")
+                CompletedSessionMetric(label: "Ended", value: session.endedAt?.formatted(date: .omitted, time: .shortened) ?? "Unknown")
+                CompletedSessionMetric(label: "Language", value: session.primaryLanguage.uppercased())
+                CompletedSessionMetric(label: "Transcript preview", value: "\(session.finalSegmentCount) final, \(session.partialSegmentCount) live")
+            }
+
+            if let stablePreviewText = session.stablePreviewText {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Latest stable line")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(stablePreviewText)
+                        .lineLimit(2)
+                }
+            }
+
+            if !session.note.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Note")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(session.note)
+                        .lineLimit(2)
+                }
+            }
+
+            Text("Saved locally in this app for now. Markdown export and search index are coming in a later slice.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .padding(16)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+struct CompletedSessionMetric: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.callout.weight(.medium))
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+struct RecentRecordingsSidebar: View {
+    let sessions: [CompletedRecordingSession]
+    @State private var isSessionGroupExpanded = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Recent recordings")
+                .font(.headline)
+                .padding(.horizontal, 14)
+                .padding(.top, 18)
+
+            if sessions.isEmpty {
+                Text("Completed sessions will appear here after you stop recording.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 14)
+            } else {
+                DisclosureGroup(isExpanded: $isSessionGroupExpanded) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(sessions) { session in
+                            RecentRecordingTreeRow(session: session)
+                        }
+                    }
+                    .padding(.top, 6)
+                } label: {
+                    Text("This app session")
+                        .font(.callout.weight(.semibold))
+                }
+                .padding(.horizontal, 14)
+            }
+
+            Spacer()
+
+            Text("Available until the app closes in this prototype slice.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 16)
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(Color(nsColor: .controlBackgroundColor))
+    }
+}
+
+struct RecentRecordingTreeRow: View {
+    let session: CompletedRecordingSession
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Circle()
+                .fill(Color.secondary.opacity(0.55))
+                .frame(width: 6, height: 6)
+                .padding(.top, 7)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(session.title)
+                    .font(.callout.weight(.medium))
+                    .lineLimit(1)
+                Text("\(session.endedAt?.formatted(date: .omitted, time: .shortened) ?? "Unknown") - \(session.segmentCount) preview segments")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+        }
+        .padding(.vertical, 6)
+        .padding(.leading, 8)
+        .padding(.trailing, 6)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+    }
 }
 
 struct TranscriptPanel: View {

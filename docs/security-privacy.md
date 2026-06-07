@@ -36,6 +36,14 @@ V1 must make audio retention explicit before implementation:
 
 The default must be chosen by product decision before raw audio persistence ships. Until then, implementation should avoid persistent raw audio by default.
 
+## Runtime Transcript History
+
+Prototype completed-session history may keep transcript preview text in memory during the current app process. This is acceptable only when:
+
+- No transcript preview text is written to files, SQLite, logs, REST, MCP, telemetry, or cloud services.
+- The UI clearly avoids implying durable history before Markdown/SQLite persistence ships.
+- A fresh app process starts with an empty runtime history unless durable storage has been explicitly implemented and reviewed.
+
 ## Local API And MCP
 
 - Bind to `127.0.0.1` or `localhost` by default.
@@ -68,4 +76,3 @@ Mitigations:
 - Localhost binding tests.
 - Logging tests where practical.
 - Clear first-run permission UX.
-

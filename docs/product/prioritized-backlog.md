@@ -17,6 +17,8 @@ First implementation slice: manual recording-session shell from the main app win
 
 Second implementation slice: live transcript placeholder during recording. It uses local static Russian mock segments to demonstrate `Me`/`Others` and partial/final states without real STT or audio capture.
 
+Third implementation slice: completed-session runtime history after Stop. It saves an immutable local in-memory snapshot for the current app run, shows the latest completed session, and keeps recent recordings newest first without Markdown/SQLite persistence.
+
 User steps:
 
 - Step 4: Start Recording Manually.
@@ -37,6 +39,7 @@ Definition of done:
 - Manual start/stop works from the main app window on Apple Silicon.
 - Mic and system-audio lanes can be represented as `Me` and `Others`.
 - Russian is the default transcription path.
+- Stop creates a completed-session snapshot visible in the app for the current app run.
 - Copy Last 5 Minutes works while recording.
 - Stop creates a Markdown transcript.
 - Automated checks cover transcript segment behavior and Markdown export.
