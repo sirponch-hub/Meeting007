@@ -43,6 +43,19 @@ Remind the user to consider extra skills or MCP/connectors when these moments ar
 
 ## Current Workstreams
 
+## Manual Recording Shell
+
+- Status: In Progress
+- Owner: Codex + BA/UX/Architecture/QA agents
+- User outcome: User can start and stop a local recording session from the main app window and clearly see recording state before real audio capture/STT are added.
+- Scope: Main-window Start/Stop workflow, recording session state machine, no-op capture driver boundary, elapsed timer, meeting title, quick note, transcript placeholder.
+- Out of scope: Real microphone/system audio capture, microphone permission prompts, STT, calendar, hotkeys, menu bar controls, Markdown export, SQLite, REST, MCP.
+- Docs touched: `docs/product/user-steps.md`, `docs/product/prioritized-backlog.md`, `docs/workstreams.md`.
+- Verification: `swift run Meeting007CoreChecks` passed; `swift build --product Meeting007App` passed.
+- Gates: BA accepted shell scope; UX accepted main-window flow; architecture accepted state shell/no-op capture boundary; specialist review not required because real audio capture/STT/privacy-sensitive data are out of scope; acceptance checks implemented in `Meeting007CoreChecks`; development in progress; integration passed at package build level; BA+UX acceptance pending; user acceptance pending; merge pending.
+- Open decisions: Real audio capture permissions and raw audio retention remain future decisions.
+- Handoff notes: This work intentionally does not request microphone/screen permissions, create audio/transcript files, or touch network/cloud paths. User acceptance should check the main window Start/Stop flow only.
+
 ## Project Foundation
 
 - Status: In Progress

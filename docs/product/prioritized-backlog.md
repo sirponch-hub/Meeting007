@@ -13,6 +13,8 @@ This backlog orders v1 work by user value and risk reduction. The first mileston
 
 Goal: user can start a local recording, get transcript segments, copy recent context, stop, and receive a final Markdown transcript.
 
+First implementation slice: manual recording-session shell from the main app window. It intentionally uses a no-op capture driver and does not capture real audio yet.
+
 User steps:
 
 - Step 4: Start Recording Manually.

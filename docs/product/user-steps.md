@@ -47,6 +47,13 @@ This document decomposes Meeting007 v1 requirements into user-visible steps. Use
   - The UI clearly shows active recording, elapsed time, and current meeting title or quick-note title.
   - Hotkey and menu bar start are not required for the first implementation slice.
 
+First implementation slice:
+
+- The app provides a recording-session shell with a no-op capture driver.
+- The app does not request microphone or screen/system-audio permissions yet.
+- The app does not create audio files, transcript files, or network calls.
+- The purpose is to validate the manual Start/Stop workflow and state model before real capture is added.
+
 ## Step 5: See Live Russian Transcript
 
 - User goal: read what was just said while the meeting is still happening.

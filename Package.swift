@@ -15,6 +15,10 @@ let package = Package(
         .executable(
             name: "Meeting007CoreChecks",
             targets: ["Meeting007CoreChecks"]
+        ),
+        .executable(
+            name: "Meeting007App",
+            targets: ["Meeting007App"]
         )
     ],
     targets: [
@@ -23,6 +27,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "Meeting007CoreChecks",
+            dependencies: ["Meeting007Core"]
+        ),
+        .executableTarget(
+            name: "Meeting007App",
             dependencies: ["Meeting007Core"]
         )
     ]
