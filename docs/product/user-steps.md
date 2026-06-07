@@ -113,7 +113,7 @@ Completed-session implementation slice:
 
 - After Stop, the app creates a local in-memory completed-session snapshot for the current app run.
 - The completed snapshot includes title, start/end time, duration, primary language, quick note, and transcript preview metadata.
-- The latest completed session appears in the main screen and in a "Recent recordings" list.
+- The latest completed session appears in the main work area, and completed recordings appear in a left-side "Recent recordings" tree.
 - Multiple completed recordings remain visible newest first until the app closes.
 - This slice does not create Markdown files, SQLite records, REST/MCP access, audio files, or durable history.
 

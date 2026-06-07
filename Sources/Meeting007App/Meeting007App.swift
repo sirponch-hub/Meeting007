@@ -214,22 +214,28 @@ struct RecordingShellView: View {
     @ObservedObject var viewModel: RecordingShellViewModel
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                header
-                meetingFields
-                recordingPanel
-                TranscriptPanel(
-                    state: viewModel.state,
-                    hasStartedPreview: viewModel.hasStartedPreview,
-                    segments: viewModel.previewSegments
-                )
-                if let lastCompletedSession = viewModel.lastCompletedSession {
-                    CompletedSessionSummary(session: lastCompletedSession)
+        HStack(spacing: 0) {
+            RecentRecordingsSidebar(sessions: viewModel.recentSessions)
+                .frame(width: 260)
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    header
+                    meetingFields
+                    recordingPanel
+                    TranscriptPanel(
+                        state: viewModel.state,
+                        hasStartedPreview: viewModel.hasStartedPreview,
+                        segments: viewModel.previewSegments
+                    )
+                    if let lastCompletedSession = viewModel.lastCompletedSession {
+                        CompletedSessionSummary(session: lastCompletedSession)
+                    }
                 }
-                RecentSessionsPanel(sessions: viewModel.recentSessions)
+                .padding(28)
             }
-            .padding(28)
         }
         .background(Color(nsColor: .windowBackgroundColor))
     }
@@ -381,58 +387,76 @@ struct CompletedSessionMetric: View {
     }
 }
 
-struct RecentSessionsPanel: View {
+struct RecentRecordingsSidebar: View {
     let sessions: [CompletedRecordingSession]
+    @State private var isSessionGroupExpanded = true
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 14) {
             Text("Recent recordings")
                 .font(.headline)
+                .padding(.horizontal, 14)
+                .padding(.top, 18)
 
-            VStack(alignment: .leading, spacing: 8) {
-                if sessions.isEmpty {
-                    Text("Completed sessions will appear here after you stop recording.")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(sessions) { session in
-                        RecentSessionRow(session: session)
-                    }
-
-                    Text("Available until the app closes in this prototype slice.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(16)
-            .background(Color(nsColor: .textBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-        }
-    }
-}
-
-struct RecentSessionRow: View {
-    let session: CompletedRecordingSession
-
-    var body: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(session.title)
-                    .font(.callout.weight(.semibold))
-                Text("\(session.endedAt?.formatted(date: .omitted, time: .shortened) ?? "Unknown") - \(session.segmentCount) preview segments")
-                    .font(.caption)
+            if sessions.isEmpty {
+                Text("Completed sessions will appear here after you stop recording.")
+                    .font(.callout)
                     .foregroundStyle(.secondary)
+                    .padding(.horizontal, 14)
+            } else {
+                DisclosureGroup(isExpanded: $isSessionGroupExpanded) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(sessions) { session in
+                            RecentRecordingTreeRow(session: session)
+                        }
+                    }
+                    .padding(.top, 6)
+                } label: {
+                    Text("This app session")
+                        .font(.callout.weight(.semibold))
+                }
+                .padding(.horizontal, 14)
             }
 
             Spacer()
 
-            Text(TimestampFormatter.format(session.duration))
-                .font(.callout.monospacedDigit())
+            Text("Available until the app closes in this prototype slice.")
+                .font(.caption)
                 .foregroundStyle(.secondary)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 16)
         }
-        .padding(10)
-        .background(Color(nsColor: .windowBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(Color(nsColor: .controlBackgroundColor))
+    }
+}
+
+struct RecentRecordingTreeRow: View {
+    let session: CompletedRecordingSession
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Circle()
+                .fill(Color.secondary.opacity(0.55))
+                .frame(width: 6, height: 6)
+                .padding(.top, 7)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(session.title)
+                    .font(.callout.weight(.medium))
+                    .lineLimit(1)
+                Text("\(session.endedAt?.formatted(date: .omitted, time: .shortened) ?? "Unknown") - \(session.segmentCount) preview segments")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+        }
+        .padding(.vertical, 6)
+        .padding(.leading, 8)
+        .padding(.trailing, 6)
+        .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
     }
 }
