@@ -66,6 +66,13 @@ First implementation slice:
   - Finalized text does not jump or rewrite unexpectedly.
   - Local microphone speech is labeled `Me`; system audio is labeled `Others`.
 
+Placeholder implementation slice:
+
+- During recording, the app shows static local Russian mock segments that demonstrate the future live transcript experience.
+- Mock segments include `Me` and `Others` labels plus partial/final states.
+- The UI clearly says this is a preview, not real audio transcription.
+- The app does not capture audio, run STT, save transcript files, or call any network service for this slice.
+
 ## Step 6: Copy Recent Context During Meeting
 
 - User goal: quickly react in another app using the latest meeting context.

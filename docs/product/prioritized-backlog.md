@@ -15,6 +15,8 @@ Goal: user can start a local recording, get transcript segments, copy recent con
 
 First implementation slice: manual recording-session shell from the main app window. It intentionally uses a no-op capture driver and does not capture real audio yet.
 
+Second implementation slice: live transcript placeholder during recording. It uses local static Russian mock segments to demonstrate `Me`/`Others` and partial/final states without real STT or audio capture.
+
 User steps:
 
 - Step 4: Start Recording Manually.

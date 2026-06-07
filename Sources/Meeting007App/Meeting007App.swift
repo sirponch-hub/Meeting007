@@ -19,12 +19,20 @@ final class RecordingShellViewModel: ObservableObject {
     @Published private(set) var state: RecordingState = .idle
     @Published private(set) var elapsedText = "00:00"
     @Published private(set) var errorMessage: String?
+    @Published private(set) var previewSegments: [TranscriptSegment] = []
+    @Published private(set) var hasStartedPreview = false
 
     private let controller: RecordingSessionController
+    private let transcriptPreviewController: LiveTranscriptPreviewController
     private var timer: Timer?
+    private var transcriptPreviewTimer: Timer?
 
-    init(controller: RecordingSessionController = RecordingSessionController()) {
+    init(
+        controller: RecordingSessionController = RecordingSessionController(),
+        transcriptPreviewController: LiveTranscriptPreviewController = LiveTranscriptPreviewController()
+    ) {
         self.controller = controller
+        self.transcriptPreviewController = transcriptPreviewController
     }
 
     var statusText: String {
@@ -80,6 +88,7 @@ final class RecordingShellViewModel: ObservableObject {
             apply(nextState)
 
             if nextState.isRecording {
+                await startTranscriptPreview()
                 startTimer()
             }
         }
@@ -89,8 +98,10 @@ final class RecordingShellViewModel: ObservableObject {
         errorMessage = nil
         state = .stopping
         stopTimer()
+        stopTranscriptPreviewTimer()
 
         Task {
+            await transcriptPreviewController.stop()
             let nextState = await controller.stopManualRecording()
             apply(nextState)
         }
@@ -101,6 +112,10 @@ final class RecordingShellViewModel: ObservableObject {
 
         if case let .failed(failure) = nextState {
             errorMessage = failure.message
+        }
+
+        if case .failed = nextState {
+            stopTranscriptPreviewTimer()
         }
 
         updateElapsed()
@@ -119,6 +134,33 @@ final class RecordingShellViewModel: ObservableObject {
     private func stopTimer() {
         timer?.invalidate()
         timer = nil
+    }
+
+    private func startTranscriptPreview() async {
+        guard let session = await controller.currentSession() else {
+            return
+        }
+
+        hasStartedPreview = true
+        previewSegments = []
+        await transcriptPreviewController.start(meetingID: session.id)
+        await advanceTranscriptPreview()
+
+        stopTranscriptPreviewTimer()
+        transcriptPreviewTimer = Timer.scheduledTimer(withTimeInterval: 1.35, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                await self?.advanceTranscriptPreview()
+            }
+        }
+    }
+
+    private func advanceTranscriptPreview() async {
+        previewSegments = await transcriptPreviewController.advance()
+    }
+
+    private func stopTranscriptPreviewTimer() {
+        transcriptPreviewTimer?.invalidate()
+        transcriptPreviewTimer = nil
     }
 
     private func updateElapsed() {
@@ -146,7 +188,11 @@ struct RecordingShellView: View {
             header
             meetingFields
             recordingPanel
-            transcriptPlaceholder
+            TranscriptPanel(
+                state: viewModel.state,
+                hasStartedPreview: viewModel.hasStartedPreview,
+                segments: viewModel.previewSegments
+            )
             Spacer(minLength: 0)
         }
         .padding(28)
@@ -223,27 +269,120 @@ struct RecordingShellView: View {
         }
     }
 
-    private var transcriptPlaceholder: some View {
+}
+
+struct TranscriptPanel: View {
+    let state: RecordingState
+    let hasStartedPreview: Bool
+    let segments: [TranscriptSegment]
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Transcript")
                 .font(.headline)
-            Text(transcriptPlaceholderText)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(16)
-                .background(Color(nsColor: .textBackgroundColor))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+
+            VStack(alignment: .leading, spacing: 12) {
+                if shouldShowPreview {
+                    TranscriptPreviewBanner(isRecording: state.isRecording)
+
+                    if segments.isEmpty {
+                        Text("Preview transcript segments will appear here.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 10) {
+                                ForEach(segments) { segment in
+                                    TranscriptSegmentRow(segment: segment)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(minHeight: 170, maxHeight: 230)
+                    }
+                } else {
+                    TranscriptEmptyState()
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+            .background(Color(nsColor: .textBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
         }
     }
 
-    private var transcriptPlaceholderText: String {
-        switch viewModel.state {
-        case .recording, .starting, .stopping:
-            return "Recording is active. Transcript preview is not enabled yet."
-        case .stopped:
-            return "Transcript area ready."
-        default:
-            return "Transcript will appear here during future transcription-enabled recordings."
+    private var shouldShowPreview: Bool {
+        state.isRecording || hasStartedPreview
+    }
+}
+
+struct TranscriptEmptyState: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Your transcript will appear here")
+                .font(.headline)
+            Text("Start recording to see a live transcript preview. Russian transcription is the primary path for v1.")
+                .foregroundStyle(.secondary)
         }
+    }
+}
+
+struct TranscriptPreviewBanner: View {
+    let isRecording: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(isRecording ? Color.red : Color.secondary)
+                    .frame(width: 8, height: 8)
+                Text("Preview transcript")
+                    .font(.subheadline.weight(.semibold))
+            }
+            Text(isRecording ? "Mock Russian segments are shown while live transcription is being wired in. This is not real audio transcription yet." : "This sample transcript was generated for the placeholder experience.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+struct TranscriptSegmentRow: View {
+    let segment: TranscriptSegment
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Rectangle()
+                .fill(segment.state == .partial ? Color.accentColor : Color.clear)
+                .frame(width: 3)
+                .clipShape(Capsule())
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(segment.speakerLabel)
+                        .font(.caption.weight(.semibold))
+                    Text(segment.state == .partial ? "live" : TimestampFormatter.format(segment.startTime))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    if segment.state == .partial {
+                        Text("partial")
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.accentColor.opacity(0.16))
+                            .clipShape(Capsule())
+                    }
+                }
+
+                Text(segment.text)
+                    .font(.body)
+                    .italic(segment.state == .partial)
+                    .foregroundStyle(segment.state == .partial ? .secondary : .primary)
+            }
+        }
+        .padding(10)
+        .background(Color(nsColor: segment.state == .partial ? .controlBackgroundColor : .windowBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(segment.speakerLabel), \(segment.state == .partial ? "live partial transcript" : "final transcript"), \(segment.text)")
     }
 }

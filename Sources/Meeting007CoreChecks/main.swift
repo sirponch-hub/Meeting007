@@ -15,6 +15,9 @@ struct Meeting007CoreChecks {
         await checkStopWhileIdleIsSafe()
         await checkStartFailureReturnsStableErrorState()
         await checkDefaultRecordingLanguageIsRussian()
+        await checkLiveTranscriptPreviewEmitsRussianSegments()
+        await checkLiveTranscriptPreviewReplacesPartialWithFinal()
+        await checkLiveTranscriptPreviewStopDisablesFurtherUpdates()
         print("Meeting007CoreChecks passed")
     }
 
@@ -210,6 +213,51 @@ struct Meeting007CoreChecks {
         let session = await controller.currentSession()
         require(session?.title == "Untitled meeting", "Empty meeting title must fall back to Untitled meeting.")
         require(session?.primaryLanguage == "ru", "Recording sessions must default to Russian.")
+    }
+
+    private static func checkLiveTranscriptPreviewEmitsRussianSegments() async {
+        let meetingID = UUID()
+        let preview = LiveTranscriptPreviewController()
+        await preview.start(meetingID: meetingID)
+
+        _ = await preview.advance()
+        _ = await preview.advance()
+        let segments = await preview.advance()
+
+        require(segments.count == 2, "Preview should contain two visible segments after partial replacement and one final segment.")
+        require(segments.contains { $0.speakerLabel == "Me" }, "Preview must include Me speaker label.")
+        require(segments.contains { $0.speakerLabel == "Others" }, "Preview must include Others speaker label.")
+        require(segments.contains { $0.text.contains("Давайте начнем") }, "Preview must use Russian sample text.")
+        require(segments.map(\.startTime) == segments.map(\.startTime).sorted(), "Preview segments must be sorted by start time.")
+    }
+
+    private static func checkLiveTranscriptPreviewReplacesPartialWithFinal() async {
+        let meetingID = UUID()
+        let preview = LiveTranscriptPreviewController()
+        await preview.start(meetingID: meetingID)
+
+        let partialSegments = await preview.advance()
+        let finalSegments = await preview.advance()
+
+        require(partialSegments.count == 1, "First preview step should show one partial segment.")
+        require(partialSegments.first?.state == .partial, "First preview segment should be partial.")
+        require(finalSegments.count == 1, "Final preview step with the same ID should replace, not duplicate, the segment.")
+        require(finalSegments.first?.state == .final, "Second preview segment should finalize the same segment.")
+        require(partialSegments.first?.id == finalSegments.first?.id, "Partial and final preview updates must reuse the same segment ID.")
+    }
+
+    private static func checkLiveTranscriptPreviewStopDisablesFurtherUpdates() async {
+        let meetingID = UUID()
+        let preview = LiveTranscriptPreviewController()
+        await preview.start(meetingID: meetingID)
+
+        let firstSegments = await preview.advance()
+        await preview.stop()
+        let stoppedSegments = await preview.advance()
+        let isActive = await preview.isActive()
+
+        require(!isActive, "Preview should not remain active after stop.")
+        require(stoppedSegments == firstSegments, "Preview stop must prevent further fake segment updates.")
     }
 
     private static func require(_ condition: @autoclosure () -> Bool, _ message: String) {
