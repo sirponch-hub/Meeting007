@@ -46,14 +46,14 @@ Remind the user to consider extra skills or MCP/connectors when these moments ar
 
 ## Live Transcript Placeholder
 
-- Status: In Progress
+- Status: Done
 - Owner: Codex + BA/UX/Architecture/QA agents
 - User outcome: User sees how live transcript will feel during recording: Russian mock segments appear with `Me`/`Others` labels and clear partial/final states.
 - Scope: Local fake transcript preview during active recording, deterministic Russian mock segments, partial-to-final replacement, preview disclosure, retained preview after Stop.
 - Out of scope: Real microphone/system audio capture, STT, model choice, persistence, Markdown files, SQLite, REST, MCP, copy/export, hotkeys, menu bar controls.
 - Docs touched: `docs/product/user-steps.md`, `docs/product/prioritized-backlog.md`, `docs/workstreams.md`.
-- Verification: `swift run Meeting007CoreChecks` passed; `swift build --product Meeting007App` passed.
-- Gates: BA accepted mock preview scope; UX accepted preview disclosure and partial/final states; architecture accepted reuse of `TranscriptSegment`/`MeetingTranscript` with fake provider boundary; specialist review not required because real audio/STT/files/network are out of scope; acceptance checks implemented in `Meeting007CoreChecks`; development in progress; integration passed at package build level; BA+UX acceptance pending; user acceptance pending; merge pending.
+- Verification: `swift run Meeting007CoreChecks` passed; `swift build --product Meeting007App` passed; user accepted the live transcript preview.
+- Gates: BA accepted mock preview scope; UX accepted preview disclosure and partial/final states; architecture accepted reuse of `TranscriptSegment`/`MeetingTranscript` with fake provider boundary; specialist review not required because real audio/STT/files/network are out of scope; acceptance checks implemented in `Meeting007CoreChecks`; development complete; integration passed at package build level; BA+UX accepted; user accepted; merge complete after this workstream update reaches `main`.
 - Open decisions: Real STT engine, transcript persistence, copy/export, and REST/MCP remain future work.
 - Handoff notes: This preview uses static Russian fake text only. It does not request permissions, capture audio, create transcript files, or expose transcript data through API/MCP.
 
