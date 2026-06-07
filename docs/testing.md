@@ -16,6 +16,8 @@ Required coverage:
 - Copy full transcript.
 - Copy last 5 minutes.
 - Markdown export.
+- Completed-session runtime history after Stop.
+- In-memory history deduplication and newest-first ordering.
 - SQLite mapping and migrations.
 - API response shapes.
 
@@ -43,6 +45,9 @@ Use deterministic fixtures:
 - macOS screen/system audio permission prompt.
 - Calendar permission prompt.
 - Manual start/stop recording.
+- Stop recording and verify the completed session appears in recent recordings for the current app run.
+- Start/stop a second recording and verify recent recordings stay newest first.
+- Relaunch the app and verify prototype recent recordings are not presented as durable history until persistence ships.
 - Global hotkey start/stop when that convenience feature is implemented.
 - Zoom capture.
 - Google Meet capture.

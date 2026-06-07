@@ -44,6 +44,19 @@ Remind the user to consider extra skills or MCP/connectors when these moments ar
 
 ## Current Workstreams
 
+## Completed Session Runtime History
+
+- Status: Ready for Review
+- Owner: Codex + BA/UX/Architecture/QA agents
+- User outcome: After stopping a recording, the user can see that the meeting was completed and can return to its local transcript preview during the current app run.
+- Scope: Immutable completed-session snapshot, in-memory recent recording store, latest completed-session summary, newest-first recent recordings list, quick-note preservation, transcript preview metadata.
+- Out of scope: SQLite, Markdown file creation, durable history after app relaunch, REST/MCP exposure, search, raw audio retention, cloud sync, telemetry, hotkey/menu bar controls.
+- Docs touched: `docs/product/user-steps.md`, `docs/product/prioritized-backlog.md`, `docs/workstreams.md`.
+- Verification: `swift run Meeting007CoreChecks` passed; `swift build --product Meeting007App` passed.
+- Gates: BA accepted runtime-only completed-session scope and post-build implementation; UX accepted completed-session summary and recent recordings list after `Started` metadata was added; architecture accepted app-level snapshot orchestration with an in-memory store; QA accepted automated coverage for the slice; security/privacy review is lightweight because no files/network/audio persistence were added; acceptance checks implemented in `Meeting007CoreChecks`; development complete; integration passed at package build level; user acceptance pending; merge pending.
+- Open decisions: Durable Markdown/SQLite storage, app relaunch history, search, and local API/MCP remain future work.
+- Handoff notes: This history disappears when the app process exits. Product copy must keep saying this is local and temporary until persistent storage ships.
+
 ## Live Transcript Placeholder
 
 - Status: Done
