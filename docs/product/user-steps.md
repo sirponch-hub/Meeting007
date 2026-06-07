@@ -86,6 +86,15 @@ Placeholder implementation slice:
   - User gets visible confirmation that text was copied.
   - Hotkey and menu bar copy actions can be added later.
 
+First implementation slice:
+
+- The `Transcript` panel includes a visible `Copy Last 5 Minutes` button.
+- The button is enabled only while recording is active and transcript preview text exists.
+- The copied text comes from the current local preview transcript and includes app name, meeting title, copy window, copied time, language, timestamps, and `Me`/`Others` labels.
+- Partial preview lines are copied with a `(live)` marker.
+- The app shows a short confirmation after copying, or a stable non-blocking message if clipboard write fails.
+- This slice does not add hotkey/menu bar copy actions, full transcript copy, real audio transcription, files, REST/MCP, telemetry, or cloud access.
+
 ## Step 7: Copy Full Transcript During Meeting
 
 - User goal: export everything captured so far without ending the meeting.

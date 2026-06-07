@@ -14,7 +14,7 @@ Required coverage:
 - Partial-to-final segment replacement.
 - Timestamp formatting.
 - Copy full transcript.
-- Copy last 5 minutes.
+- Copy last 5 minutes window selection, formatted clipboard text, metadata header, and live partial markers.
 - Markdown export.
 - Completed-session runtime history after Stop.
 - In-memory history deduplication and newest-first ordering.
@@ -57,6 +57,8 @@ Use deterministic fixtures:
 - Separate `Me` and `Others` lanes.
 - Copy full transcript during active recording.
 - Copy last 5 minutes during active recording.
+- Verify Copy Last 5 Minutes is disabled before transcript preview text appears.
+- Verify Copy Last 5 Minutes puts timestamped `Me`/`Others` transcript text on the clipboard.
 - Stop meeting and verify Markdown output.
 - Verify REST transcript matches Markdown.
 - Verify MCP transcript matches REST.
