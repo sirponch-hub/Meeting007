@@ -7,6 +7,10 @@ struct Meeting007CoreChecks {
         checkSegmentsAreSortedByStartTime()
         checkUpsertReplacesPartialWithFinalSegment()
         checkCopyLastWindowIncludesOnlyRecentSegments()
+        checkCopyLastWindowReturnsFormattedSpeakerText()
+        checkCopyLastWindowCanReturnEmptyText()
+        checkCopyLastWindowContextIncludesHeaderAndLiveMarker()
+        checkCopyLastWindowContextCanReturnEmptyText()
         checkTimestampFormatterUsesMinutesAndHours()
         checkMarkdownExportIncludesOnlyFinalSegments()
         await checkManualRecordingStartCreatesSession()
@@ -104,6 +108,95 @@ struct Meeting007CoreChecks {
         require(!copiedText.contains("Old context"), "Old segment must be outside the copy window.")
         require(copiedText.contains("Recent context"), "Recent segment must be included in the copy window.")
         require(copiedText.contains("Others"), "Copy text must include speaker labels.")
+    }
+
+    private static func checkCopyLastWindowReturnsFormattedSpeakerText() {
+        let meetingID = UUID()
+        let transcript = MeetingTranscript(meetingID: meetingID, segments: [
+            TranscriptSegment(
+                meetingID: meetingID,
+                lane: .me,
+                state: .final,
+                startTime: 61,
+                endTime: 66,
+                text: "Нужно быстро ответить клиенту."
+            ),
+            TranscriptSegment(
+                meetingID: meetingID,
+                lane: .others,
+                state: .partial,
+                startTime: 70,
+                endTime: 75,
+                text: "Да, пришлите последний контекст..."
+            )
+        ])
+
+        let copiedText = transcript.textForLast(seconds: 300, from: 90)
+
+        require(copiedText.contains("[01:01] Me: Нужно быстро ответить клиенту."), "Copy text must include timestamps and Me label.")
+        require(copiedText.contains("[01:10] Others: Да, пришлите последний контекст..."), "Copy text must include partial text and Others label.")
+    }
+
+    private static func checkCopyLastWindowCanReturnEmptyText() {
+        let meetingID = UUID()
+        let transcript = MeetingTranscript(meetingID: meetingID)
+
+        let copiedText = transcript.textForLast(seconds: 300, from: 600)
+
+        require(copiedText.isEmpty, "Copy text should be empty when no segments are available.")
+    }
+
+    private static func checkCopyLastWindowContextIncludesHeaderAndLiveMarker() {
+        let meetingID = UUID()
+        let transcript = MeetingTranscript(meetingID: meetingID, segments: [
+            TranscriptSegment(
+                meetingID: meetingID,
+                lane: .me,
+                state: .final,
+                startTime: 12,
+                endTime: 16,
+                text: "Сформулирую короткий ответ."
+            ),
+            TranscriptSegment(
+                meetingID: meetingID,
+                lane: .others,
+                state: .partial,
+                startTime: 20,
+                endTime: 23,
+                text: "Добавьте последний риск..."
+            )
+        ])
+
+        let copiedText = transcript.contextTextForLast(
+            seconds: 300,
+            from: 30,
+            meetingTitle: "Русская встреча",
+            language: "ru",
+            copiedAtText: "14:32"
+        )
+
+        require(copiedText.contains("Meeting007"), "Context copy must identify the source app.")
+        require(copiedText.contains("Meeting: Русская встреча"), "Context copy must include the meeting title.")
+        require(copiedText.contains("Window: Last 5 minutes"), "Context copy must include the copy window.")
+        require(copiedText.contains("Copied: 14:32"), "Context copy must include copied-at text.")
+        require(copiedText.contains("Language: ru"), "Context copy must include the language.")
+        require(copiedText.contains("[00:12] Me: Сформулирую короткий ответ."), "Context copy must include final speaker lines.")
+        require(copiedText.contains("[00:20] Others (live): Добавьте последний риск..."), "Context copy must mark partial lines as live.")
+    }
+
+    private static func checkCopyLastWindowContextCanReturnEmptyText() {
+        let meetingID = UUID()
+        let transcript = MeetingTranscript(meetingID: meetingID)
+
+        let copiedText = transcript.contextTextForLast(
+            seconds: 300,
+            from: 30,
+            meetingTitle: "Empty",
+            language: "ru",
+            copiedAtText: "14:32"
+        )
+
+        require(copiedText.isEmpty, "Context copy should return empty text when no segments are available.")
     }
 
     private static func checkTimestampFormatterUsesMinutesAndHours() {

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import Meeting007Core
 
@@ -22,21 +23,26 @@ final class RecordingShellViewModel: ObservableObject {
     @Published private(set) var previewSegments: [TranscriptSegment] = []
     @Published private(set) var hasStartedPreview = false
     @Published private(set) var recentSessions: [CompletedRecordingSession] = []
+    @Published private(set) var copyFeedbackText: String?
 
     private let controller: RecordingSessionController
     private let transcriptPreviewController: LiveTranscriptPreviewController
     private let recordingStore: any RecordingSessionStore
+    private let clipboardWriter: any ClipboardWriting
+    private let copyRecentWindowSeconds: TimeInterval = 300
     private var timer: Timer?
     private var transcriptPreviewTimer: Timer?
 
     init(
         controller: RecordingSessionController = RecordingSessionController(),
         transcriptPreviewController: LiveTranscriptPreviewController = LiveTranscriptPreviewController(),
-        recordingStore: any RecordingSessionStore = InMemoryRecordingSessionStore()
+        recordingStore: any RecordingSessionStore = InMemoryRecordingSessionStore(),
+        clipboardWriter: any ClipboardWriting = PasteboardClipboardWriter()
     ) {
         self.controller = controller
         self.transcriptPreviewController = transcriptPreviewController
         self.recordingStore = recordingStore
+        self.clipboardWriter = clipboardWriter
     }
 
     var statusText: String {
@@ -77,6 +83,10 @@ final class RecordingShellViewModel: ObservableObject {
         recentSessions.first
     }
 
+    var canCopyRecentContext: Bool {
+        state.isRecording && !previewSegments.isEmpty
+    }
+
     func primaryAction() {
         if state.isRecording {
             stop()
@@ -87,6 +97,7 @@ final class RecordingShellViewModel: ObservableObject {
 
     func start() {
         errorMessage = nil
+        copyFeedbackText = nil
         state = .starting
         elapsedText = "00:00"
 
@@ -104,6 +115,7 @@ final class RecordingShellViewModel: ObservableObject {
 
     func stop() {
         errorMessage = nil
+        copyFeedbackText = nil
         state = .stopping
         stopTimer()
         stopTranscriptPreviewTimer()
@@ -115,6 +127,34 @@ final class RecordingShellViewModel: ObservableObject {
             let nextState = await controller.stopManualRecording()
             apply(nextState)
             await saveCompletedSessionIfNeeded(state: nextState, segments: frozenSegments)
+        }
+    }
+
+    func copyLastFiveMinutes() {
+        guard canCopyRecentContext else {
+            copyFeedbackText = "No transcript text to copy yet."
+            return
+        }
+
+        let transcript = MeetingTranscript(meetingID: previewSegments.first?.meetingID ?? UUID(), segments: previewSegments)
+        let latestTranscriptTime = previewSegments.map(\.endTime).max() ?? 0
+        let copiedText = transcript.contextTextForLast(
+            seconds: copyRecentWindowSeconds,
+            from: latestTranscriptTime,
+            meetingTitle: displayTitle,
+            language: "ru",
+            copiedAtText: Date().formatted(date: .omitted, time: .shortened)
+        )
+
+        guard !copiedText.isEmpty else {
+            copyFeedbackText = "No transcript text to copy yet."
+            return
+        }
+
+        if clipboardWriter.write(copiedText) {
+            copyFeedbackText = "Copied last 5 minutes, including live preview lines."
+        } else {
+            copyFeedbackText = "Could not copy context. Try again."
         }
     }
 
@@ -210,6 +250,17 @@ final class RecordingShellViewModel: ObservableObject {
     }
 }
 
+protocol ClipboardWriting: Sendable {
+    func write(_ text: String) -> Bool
+}
+
+struct PasteboardClipboardWriter: ClipboardWriting {
+    func write(_ text: String) -> Bool {
+        NSPasteboard.general.clearContents()
+        return NSPasteboard.general.setString(text, forType: .string)
+    }
+}
+
 struct RecordingShellView: View {
     @ObservedObject var viewModel: RecordingShellViewModel
 
@@ -228,7 +279,10 @@ struct RecordingShellView: View {
                     TranscriptPanel(
                         state: viewModel.state,
                         hasStartedPreview: viewModel.hasStartedPreview,
-                        segments: viewModel.previewSegments
+                        segments: viewModel.previewSegments,
+                        canCopyRecentContext: viewModel.canCopyRecentContext,
+                        copyFeedbackText: viewModel.copyFeedbackText,
+                        onCopyLastFiveMinutes: viewModel.copyLastFiveMinutes
                     )
                     if let lastCompletedSession = viewModel.lastCompletedSession {
                         CompletedSessionSummary(session: lastCompletedSession)
@@ -465,19 +519,44 @@ struct TranscriptPanel: View {
     let state: RecordingState
     let hasStartedPreview: Bool
     let segments: [TranscriptSegment]
+    let canCopyRecentContext: Bool
+    let copyFeedbackText: String?
+    let onCopyLastFiveMinutes: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Transcript")
-                .font(.headline)
+            HStack(alignment: .center, spacing: 12) {
+                Text("Transcript")
+                    .font(.headline)
+
+                Spacer()
+
+                Button {
+                    onCopyLastFiveMinutes()
+                } label: {
+                    Label("Copy Last 5 Minutes", systemImage: "doc.on.doc")
+                }
+                .disabled(!canCopyRecentContext)
+                .help(canCopyRecentContext ? "Copy recent meeting context." : "Transcript lines will appear here before you can copy context.")
+                .accessibilityLabel("Copy last five minutes of transcript")
+            }
 
             VStack(alignment: .leading, spacing: 12) {
+                if let copyFeedbackText {
+                    Text(copyFeedbackText)
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+
                 if shouldShowPreview {
                     TranscriptPreviewBanner(isRecording: state.isRecording)
 
                     if segments.isEmpty {
-                        Text("Preview transcript segments will appear here.")
-                            .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Preview transcript segments will appear here.")
+                            Text("Copy becomes available after there is meeting context.")
+                        }
+                        .foregroundStyle(.secondary)
                     } else {
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 10) {

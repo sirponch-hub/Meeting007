@@ -19,6 +19,8 @@ Second implementation slice: live transcript placeholder during recording. It us
 
 Third implementation slice: completed-session runtime history after Stop. It saves an immutable local in-memory snapshot for the current app run, shows the latest completed session, and keeps recent recordings newest first without Markdown/SQLite persistence.
 
+Fourth implementation slice: Copy Last 5 Minutes during active recording. It copies the current local preview transcript window from the visible transcript panel with timestamps and speaker labels, without hotkey/menu bar actions yet.
+
 User steps:
 
 - Step 4: Start Recording Manually.

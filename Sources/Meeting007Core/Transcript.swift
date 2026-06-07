@@ -44,5 +44,34 @@ public struct MeetingTranscript: Equatable, Sendable {
             .map { "[\(TimestampFormatter.format($0.startTime))] \($0.speakerLabel): \($0.text)" }
             .joined(separator: "\n")
     }
-}
 
+    public func contextTextForLast(
+        seconds: TimeInterval,
+        from currentTime: TimeInterval,
+        meetingTitle: String,
+        language: String,
+        copiedAtText: String
+    ) -> String {
+        let cutoff = max(0, currentTime - seconds)
+        let recentSegments = segments(endingAfter: cutoff)
+        guard !recentSegments.isEmpty else {
+            return ""
+        }
+
+        let header = [
+            "Meeting007",
+            "Meeting: \(meetingTitle)",
+            "Window: Last \(Int(seconds / 60)) minutes",
+            "Copied: \(copiedAtText)",
+            "Language: \(language)"
+        ].joined(separator: "\n")
+        let body = recentSegments
+            .map { segment in
+                let liveMarker = segment.state == .partial ? " (live)" : ""
+                return "[\(TimestampFormatter.format(segment.startTime))] \(segment.speakerLabel)\(liveMarker): \(segment.text)"
+            }
+            .joined(separator: "\n")
+
+        return "\(header)\n\n\(body)"
+    }
+}
