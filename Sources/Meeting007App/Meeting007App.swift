@@ -409,6 +409,7 @@ struct PasteboardClipboardWriter: ClipboardWriting {
 
 struct RecordingShellView: View {
     @ObservedObject var viewModel: RecordingShellViewModel
+    @State private var selectedSection: ShellSection = .recording
 
     var body: some View {
         HStack(spacing: 0) {
@@ -416,6 +417,7 @@ struct RecordingShellView: View {
                 sessions: viewModel.recentSessions,
                 activeTitle: viewModel.displayTitle,
                 isRecording: viewModel.state.isRecording,
+                selectedSection: $selectedSection,
                 onRevealMarkdown: viewModel.revealMarkdownFile,
                 onCopyMarkdownPath: viewModel.copyMarkdownPath
             )
@@ -428,35 +430,43 @@ struct RecordingShellView: View {
 
                 Divider()
 
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        quickNoteDisclosure
-                        SettingsPanel(
-                            folderURL: viewModel.transcriptFolderURL,
-                            feedbackText: viewModel.transcriptStorageFeedbackText,
-                            onChooseFolder: viewModel.chooseTranscriptFolder,
-                            onRevealFolder: viewModel.revealTranscriptFolder,
-                            onCopyPath: viewModel.copyTranscriptFolderPath,
-                            onResetToDefault: viewModel.resetTranscriptFolderToDefault
-                        )
-                        errorMessage
-                        if let lastCompletedSession = viewModel.lastCompletedSession {
-                            transcriptPanel
-                            CompletedSessionSummary(
-                                session: lastCompletedSession,
-                                markdownExportFeedbackText: viewModel.markdownExportFeedbackText,
-                                onRetryMarkdownExport: viewModel.retryMarkdownExport
-                            )
-                        } else {
-                            transcriptPanel
-                        }
-                    }
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 18)
+                switch selectedSection {
+                case .recording:
+                    recordingContent
+                case .settings:
+                    SettingsView(
+                        folderURL: viewModel.transcriptFolderURL,
+                        feedbackText: viewModel.transcriptStorageFeedbackText,
+                        onChooseFolder: viewModel.chooseTranscriptFolder,
+                        onRevealFolder: viewModel.revealTranscriptFolder,
+                        onCopyPath: viewModel.copyTranscriptFolderPath,
+                        onResetToDefault: viewModel.resetTranscriptFolderToDefault
+                    )
                 }
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private var recordingContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                quickNoteDisclosure
+                errorMessage
+                if let lastCompletedSession = viewModel.lastCompletedSession {
+                    transcriptPanel
+                    CompletedSessionSummary(
+                        session: lastCompletedSession,
+                        markdownExportFeedbackText: viewModel.markdownExportFeedbackText,
+                        onRetryMarkdownExport: viewModel.retryMarkdownExport
+                    )
+                } else {
+                    transcriptPanel
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 18)
+        }
     }
 
     private var recordingHeader: some View {
@@ -550,6 +560,53 @@ struct RecordingShellView: View {
     }
 }
 
+enum ShellSection: Equatable {
+    case recording
+    case settings
+}
+
+struct SettingsView: View {
+    let folderURL: URL
+    let feedbackText: String?
+    let onChooseFolder: () -> Void
+    let onRevealFolder: () -> Void
+    let onCopyPath: () -> Void
+    let onResetToDefault: () -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Settings")
+                        .font(.system(size: 26, weight: .semibold))
+                    Text("Local storage and app preferences.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Transcript Storage")
+                        .font(.headline)
+
+                    TranscriptFolderSettingRow(
+                        folderURL: folderURL,
+                        feedbackText: feedbackText,
+                        onChooseFolder: onChooseFolder,
+                        onRevealFolder: onRevealFolder,
+                        onCopyPath: onCopyPath,
+                        onResetToDefault: onResetToDefault
+                    )
+                }
+                .padding(16)
+                .background(Color(nsColor: .controlBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 22)
+        }
+    }
+}
+
 struct RecordingIconButton: View {
     let isRecording: Bool
     let isEnabled: Bool
@@ -569,35 +626,6 @@ struct RecordingIconButton: View {
         .help(isRecording ? "Stop recording" : "Start recording")
         .accessibilityLabel(isRecording ? "Stop recording" : "Start recording")
         .accessibilityHint(isRecording ? "Stops the current meeting recording." : "Starts a local meeting recording.")
-    }
-}
-
-struct SettingsPanel: View {
-    let folderURL: URL
-    let feedbackText: String?
-    let onChooseFolder: () -> Void
-    let onRevealFolder: () -> Void
-    let onCopyPath: () -> Void
-    let onResetToDefault: () -> Void
-
-    var body: some View {
-        DisclosureGroup {
-            TranscriptFolderSettingRow(
-                folderURL: folderURL,
-                feedbackText: feedbackText,
-                onChooseFolder: onChooseFolder,
-                onRevealFolder: onRevealFolder,
-                onCopyPath: onCopyPath,
-                onResetToDefault: onResetToDefault
-            )
-            .padding(.top, 8)
-        } label: {
-            Label("Settings", systemImage: "gearshape")
-                .font(.callout.weight(.semibold))
-        }
-        .padding(12)
-        .background(.thinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
 
@@ -785,6 +813,7 @@ struct RecentRecordingsSidebar: View {
     let sessions: [CompletedRecordingSession]
     let activeTitle: String
     let isRecording: Bool
+    @Binding var selectedSection: ShellSection
     let onRevealMarkdown: (CompletedRecordingSession) -> Void
     let onCopyMarkdownPath: (CompletedRecordingSession) -> Void
     @State private var isSessionGroupExpanded = true
@@ -800,6 +829,21 @@ struct RecentRecordingsSidebar: View {
             }
                 .padding(.horizontal, 14)
                 .padding(.top, 18)
+
+            Button {
+                selectedSection = .recording
+            } label: {
+                Label("Current meeting", systemImage: isRecording ? "record.circle.fill" : "waveform")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(isRecording ? Color.red : Color.primary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
+            .background(selectedSection == .recording ? Color.accentColor.opacity(0.14) : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 8)
+            .accessibilityLabel("Current meeting")
 
             if isRecording {
                 ActiveRecordingSidebarRow(title: activeTitle)
@@ -831,6 +875,20 @@ struct RecentRecordingsSidebar: View {
             }
 
             Spacer()
+
+            Button {
+                selectedSection = .settings
+            } label: {
+                Label("Settings", systemImage: "gearshape")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(selectedSection == .settings ? Color.accentColor.opacity(0.14) : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 8)
+            .accessibilityLabel("Settings")
 
             Text("Available until the app closes in this prototype slice.")
                 .font(.caption)

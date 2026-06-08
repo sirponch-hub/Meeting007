@@ -179,8 +179,9 @@ Markdown export implementation slice:
 
 First implementation slice:
 
-- The main window includes a compact `Settings` disclosure for non-meeting-flow controls.
-- Markdown folder controls live inside `Settings`, not in the primary recording/transcript workflow.
+- The sidebar includes a separate `Settings` entry for non-meeting-flow controls.
+- Markdown folder controls live inside the `Settings` mode, not in the primary recording/transcript workflow.
+- The primary recording view does not render Markdown folder controls.
 - The app shows the active Markdown folder path.
 - User can choose a folder through a native macOS folder picker.
 - User can reveal the active folder in Finder, copy the folder path, or reset to the default folder.
