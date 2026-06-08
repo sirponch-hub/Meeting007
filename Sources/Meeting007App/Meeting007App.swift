@@ -4,6 +4,13 @@ import Meeting007Core
 
 @main
 struct Meeting007App: App {
+    init() {
+        NSApplication.shared.setActivationPolicy(.regular)
+        DispatchQueue.main.async {
+            NSApplication.shared.activate(ignoringOtherApps: true)
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             RecordingShellView(viewModel: RecordingShellViewModel())
