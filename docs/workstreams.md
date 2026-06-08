@@ -44,16 +44,29 @@ Remind the user to consider extra skills or MCP/connectors when these moments ar
 
 ## Current Workstreams
 
-## Requirements: Configurable Markdown Storage And Google Calendar Context
+## Premium UI IA Cleanup
 
 - Status: Ready for Review
+- Owner: Codex + UX Designer agent
+- User outcome: Make the main window feel like a calm native macOS work surface where recording state, meeting title, transcript, and recent recordings have clear hierarchy.
+- Scope: Compact top recording strip, single editable meeting title in the header, icon-only start/stop control with tooltip and accessibility label, disclosed quick note, active recording row pinned in the left tree, reduced card-like main layout.
+- Out of scope: Full visual redesign, durable sidebar selection/navigation, Copy Full Transcript, configurable transcript folder UI, real audio/STT, menu bar controls, hotkeys.
+- Docs touched: `docs/workstreams.md`.
+- Verification: `swift run Meeting007CoreChecks` passed; `swift build --product Meeting007App` passed.
+- Gates: UX implementation complete; automated checks passed; user acceptance pending; merge pending.
+- Open decisions: Whether the active recording row should become selectable before durable history exists; exact icon style for future Liquid Glass toolbar once the app targets the latest macOS SDK.
+- Handoff notes: Start/Stop is intentionally icon-only in the visible UI, with `record.circle` for start and `stop.circle.fill` for stop. Accessible labels and hover help preserve discoverability without adding visible text buttons.
+
+## Requirements: Configurable Markdown Storage And Google Calendar Context
+
+- Status: Done
 - Owner: Codex + BA/UX/Architecture/QA agents
 - User outcome: User can decide where owned Markdown transcripts are saved, and Google Calendar can reduce manual meeting setup by importing meeting title/topic and participants.
 - Scope: Product requirements, user steps, backlog priority, architecture boundary, privacy rules, testing expectations, and workstream handoff notes for configurable Markdown storage and Google Calendar MVP/enhancements.
 - Out of scope: Implementing folder picker, OAuth, Google Calendar API calls, Notification Center reminders, SQLite schema changes, REST/MCP calendar exposure, or UI code.
 - Docs touched: `docs/product/BRD.md`, `docs/product/user-steps.md`, `docs/product/prioritized-backlog.md`, `docs/architecture.md`, `docs/security-privacy.md`, `docs/testing.md`, `docs/workstreams.md`.
-- Verification: `swift run Meeting007CoreChecks` passed; `swift build --product Meeting007App` passed.
-- Gates: BA requirements drafted; UX impact documented; architecture impact documented; QA expectations documented; branch ready for user acceptance; merge pending.
+- Verification: `swift run Meeting007CoreChecks` passed; `swift build --product Meeting007App` passed after merge to `main`.
+- Gates: BA requirements drafted; UX impact documented; architecture impact documented; QA expectations documented; user accepted; merge complete.
 - Open decisions: Notification reminder timing; whether participant emails are shown in UI by default or hidden behind details; whether future folder migration should move old Markdown files after explicit confirmation.
 - Handoff notes: Google Calendar MVP means title/topic and participants only. Today's meeting list, start-from-meeting, and Notification Center warnings are enhancement items. Manual start remains mandatory fallback.
 

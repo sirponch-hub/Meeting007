@@ -14,7 +14,7 @@ struct Meeting007App: App {
     var body: some Scene {
         WindowGroup {
             RecordingShellView(viewModel: RecordingShellViewModel())
-                .frame(minWidth: 760, minHeight: 560)
+                .frame(minWidth: 920, minHeight: 620)
         }
         .windowStyle(.titleBar)
     }
@@ -72,10 +72,6 @@ final class RecordingShellViewModel: ObservableObject {
         case .failed:
             return "Recording needs attention"
         }
-    }
-
-    var primaryButtonTitle: String {
-        state.isRecording ? "Stop Recording" : "Start Recording"
     }
 
     var canUsePrimaryAction: Bool {
@@ -357,112 +353,154 @@ struct RecordingShellView: View {
         HStack(spacing: 0) {
             RecentRecordingsSidebar(
                 sessions: viewModel.recentSessions,
+                activeTitle: viewModel.displayTitle,
+                isRecording: viewModel.state.isRecording,
                 onRevealMarkdown: viewModel.revealMarkdownFile,
                 onCopyMarkdownPath: viewModel.copyMarkdownPath
             )
-                .frame(width: 260)
+                .frame(width: 280)
 
             Divider()
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    header
-                    meetingFields
-                    recordingPanel
-                    TranscriptPanel(
-                        state: viewModel.state,
-                        hasStartedPreview: viewModel.hasStartedPreview,
-                        segments: viewModel.previewSegments,
-                        canCopyRecentContext: viewModel.canCopyRecentContext,
-                        copyFeedbackText: viewModel.copyFeedbackText,
-                        onCopyLastFiveMinutes: viewModel.copyLastFiveMinutes
-                    )
-                    if let lastCompletedSession = viewModel.lastCompletedSession {
-                        CompletedSessionSummary(
-                            session: lastCompletedSession,
-                            markdownExportFeedbackText: viewModel.markdownExportFeedbackText,
-                            onRetryMarkdownExport: viewModel.retryMarkdownExport
-                        )
+            VStack(spacing: 0) {
+                recordingHeader
+
+                Divider()
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        quickNoteDisclosure
+                        errorMessage
+                        if let lastCompletedSession = viewModel.lastCompletedSession {
+                            transcriptPanel
+                            CompletedSessionSummary(
+                                session: lastCompletedSession,
+                                markdownExportFeedbackText: viewModel.markdownExportFeedbackText,
+                                onRetryMarkdownExport: viewModel.retryMarkdownExport
+                            )
+                        } else {
+                            transcriptPanel
+                        }
                     }
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 18)
                 }
-                .padding(28)
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
-    private var header: some View {
-        HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Meeting007")
-                    .font(.system(size: 28, weight: .semibold))
-                Text("Local-first meeting recording")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
+    private var recordingHeader: some View {
+        HStack(alignment: .center, spacing: 16) {
+            recordingStatePill
 
-            Spacer()
-
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(viewModel.state.isRecording ? Color.red : Color.secondary)
-                    .frame(width: 10, height: 10)
-                Text(viewModel.statusText)
-                    .font(.headline)
-            }
-            .accessibilityElement(children: .combine)
-        }
-    }
-
-    private var meetingFields: some View {
-        VStack(alignment: .leading, spacing: 12) {
             TextField("Meeting title", text: $viewModel.meetingTitle)
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.plain)
+                .font(.system(size: 22, weight: .semibold))
                 .accessibilityLabel("Meeting title")
                 .onSubmit {
                     viewModel.saveMeetingTitleFromCurrentField()
                 }
 
+            Spacer(minLength: 16)
+
+            Text(viewModel.elapsedText)
+                .font(.system(.title3, design: .monospaced).weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 72, alignment: .trailing)
+                .accessibilityLabel("Elapsed recording time \(viewModel.elapsedText)")
+
+            RecordingIconButton(
+                isRecording: viewModel.state.isRecording,
+                isEnabled: viewModel.canUsePrimaryAction,
+                action: viewModel.primaryAction
+            )
+        }
+        .padding(.horizontal, 22)
+        .padding(.vertical, 14)
+        .background(.bar)
+    }
+
+    private var recordingStatePill: some View {
+        HStack(spacing: 7) {
+            Circle()
+                .fill(viewModel.state.isRecording ? Color.red : Color.secondary)
+                .frame(width: 8, height: 8)
+            Text(viewModel.statusText)
+                .font(.callout.weight(.semibold))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.regularMaterial)
+        .clipShape(Capsule())
+        .accessibilityElement(children: .combine)
+    }
+
+    private var quickNoteDisclosure: some View {
+        DisclosureGroup {
             TextField("Add a quick note for yourself", text: $viewModel.quickNote, axis: .vertical)
                 .lineLimit(3, reservesSpace: true)
                 .textFieldStyle(.roundedBorder)
                 .accessibilityLabel("Quick note")
+                .padding(.top, 8)
+        } label: {
+            Label("Quick note", systemImage: "note.text")
+                .font(.callout.weight(.semibold))
         }
+        .padding(12)
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
-    private var recordingPanel: some View {
-        HStack(spacing: 18) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(viewModel.displayTitle)
-                    .font(.title3.weight(.semibold))
-                Text("Elapsed recording time: \(viewModel.elapsedText)")
-                    .font(.system(.title2, design: .monospaced))
-                    .accessibilityLabel("Elapsed recording time \(viewModel.elapsedText)")
-            }
-
-            Spacer()
-
-            Button(viewModel.primaryButtonTitle) {
-                viewModel.primaryAction()
-            }
-            .disabled(!viewModel.canUsePrimaryAction)
-            .controlSize(.large)
-            .accessibilityLabel(viewModel.state.isRecording ? "Stop recording" : "Start recording")
-        }
-        .padding(18)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(alignment: .bottomLeading) {
-            if let errorMessage = viewModel.errorMessage {
+    @ViewBuilder
+    private var errorMessage: some View {
+        if let errorMessage = viewModel.errorMessage {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
                 Text(errorMessage)
                     .font(.callout)
-                    .foregroundStyle(.red)
-                    .padding(.leading, 18)
-                    .padding(.bottom, -28)
             }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.red.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
         }
     }
 
+    private var transcriptPanel: some View {
+        TranscriptPanel(
+            state: viewModel.state,
+            hasStartedPreview: viewModel.hasStartedPreview,
+            segments: viewModel.previewSegments,
+            canCopyRecentContext: viewModel.canCopyRecentContext,
+            copyFeedbackText: viewModel.copyFeedbackText,
+            onCopyLastFiveMinutes: viewModel.copyLastFiveMinutes
+        )
+    }
+}
+
+struct RecordingIconButton: View {
+    let isRecording: Bool
+    let isEnabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: isRecording ? "stop.circle.fill" : "record.circle")
+                .font(.system(size: 28, weight: .semibold))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(isRecording ? Color.red : Color.accentColor)
+                .frame(width: 36, height: 36)
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.45)
+        .help(isRecording ? "Stop recording" : "Start recording")
+        .accessibilityLabel(isRecording ? "Stop recording" : "Start recording")
+        .accessibilityHint(isRecording ? "Stops the current meeting recording." : "Starts a local meeting recording.")
+    }
 }
 
 struct CompletedSessionSummary: View {
@@ -579,16 +617,28 @@ struct CompletedSessionMetric: View {
 
 struct RecentRecordingsSidebar: View {
     let sessions: [CompletedRecordingSession]
+    let activeTitle: String
+    let isRecording: Bool
     let onRevealMarkdown: (CompletedRecordingSession) -> Void
     let onCopyMarkdownPath: (CompletedRecordingSession) -> Void
     @State private var isSessionGroupExpanded = true
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Recent recordings")
-                .font(.headline)
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Meeting007")
+                    .font(.headline)
+                Text("Local transcripts")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
                 .padding(.horizontal, 14)
                 .padding(.top, 18)
+
+            if isRecording {
+                ActiveRecordingSidebarRow(title: activeTitle)
+                    .padding(.horizontal, 10)
+            }
 
             if sessions.isEmpty {
                 Text("Completed sessions will appear here after you stop recording.")
@@ -623,7 +673,35 @@ struct RecentRecordingsSidebar: View {
                 .padding(.bottom, 16)
         }
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(.regularMaterial)
+    }
+}
+
+struct ActiveRecordingSidebarRow: View {
+    let title: String
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 8) {
+            Image(systemName: "record.circle.fill")
+                .foregroundStyle(.red)
+                .font(.system(size: 15, weight: .semibold))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.callout.weight(.semibold))
+                    .lineLimit(1)
+                Text("Recording now")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 8)
+        .background(Color.accentColor.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .combine)
     }
 }
 
