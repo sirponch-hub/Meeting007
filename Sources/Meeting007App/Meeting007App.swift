@@ -425,47 +425,47 @@ struct RecordingShellView: View {
 
             Divider()
 
-            VStack(spacing: 0) {
-                recordingHeader
-
-                Divider()
-
-                switch selectedSection {
-                case .recording:
-                    recordingContent
-                case .settings:
-                    SettingsView(
-                        folderURL: viewModel.transcriptFolderURL,
-                        feedbackText: viewModel.transcriptStorageFeedbackText,
-                        onChooseFolder: viewModel.chooseTranscriptFolder,
-                        onRevealFolder: viewModel.revealTranscriptFolder,
-                        onCopyPath: viewModel.copyTranscriptFolderPath,
-                        onResetToDefault: viewModel.resetTranscriptFolderToDefault
-                    )
-                }
+            switch selectedSection {
+            case .recording:
+                recordingContent
+            case .settings:
+                SettingsView(
+                    folderURL: viewModel.transcriptFolderURL,
+                    feedbackText: viewModel.transcriptStorageFeedbackText,
+                    onChooseFolder: viewModel.chooseTranscriptFolder,
+                    onRevealFolder: viewModel.revealTranscriptFolder,
+                    onCopyPath: viewModel.copyTranscriptFolderPath,
+                    onResetToDefault: viewModel.resetTranscriptFolderToDefault
+                )
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
     private var recordingContent: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                quickNoteDisclosure
-                errorMessage
-                if let lastCompletedSession = viewModel.lastCompletedSession {
-                    transcriptPanel
-                    CompletedSessionSummary(
-                        session: lastCompletedSession,
-                        markdownExportFeedbackText: viewModel.markdownExportFeedbackText,
-                        onRetryMarkdownExport: viewModel.retryMarkdownExport
-                    )
-                } else {
-                    transcriptPanel
+        VStack(spacing: 0) {
+            recordingHeader
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    quickNoteDisclosure
+                    errorMessage
+                    if let lastCompletedSession = viewModel.lastCompletedSession {
+                        transcriptPanel
+                        CompletedSessionSummary(
+                            session: lastCompletedSession,
+                            markdownExportFeedbackText: viewModel.markdownExportFeedbackText,
+                            onRetryMarkdownExport: viewModel.retryMarkdownExport
+                        )
+                    } else {
+                        transcriptPanel
+                    }
                 }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 18)
             }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 18)
         }
     }
 
