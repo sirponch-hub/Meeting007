@@ -145,8 +145,9 @@ Markdown export implementation slice:
 - Russian titles are transliterated for filesystem-safe filenames; the Markdown title preserves the original text.
 - Markdown front matter includes `id`, `title`, `started_at`, `ended_at`, `primary_language`, and `transcript_source: local_preview`.
 - Markdown body exports final transcript segments only; partial preview lines are excluded from the final file.
-- The completed-session UI shows `Markdown saved locally`, the saved path, `Show in Finder`, and `Copy path`.
-- If the user started recording before naming the meeting, the completed-session UI lets them edit the title and save Markdown again with the updated title.
+- The completed-session UI shows `Markdown saved locally` and the saved path.
+- `Show in Finder` and `Copy path` are available from the completed recording row context menu in the left-side tree.
+- If the user started recording before naming the meeting, editing the main `Meeting title` field after Stop and pressing Enter saves the new title and writes a new Markdown export with the updated title.
 - This slice does not add SQLite, REST/MCP, audio persistence, cloud sync, telemetry, or real STT.
 
 ## Step 10: Find Past Meetings

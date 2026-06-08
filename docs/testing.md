@@ -64,7 +64,8 @@ Use deterministic fixtures:
 - Verify Markdown appears under `~/Documents/Meeting007/Transcripts/`.
 - Verify Markdown filename is date/title/UUID based and filesystem-safe.
 - Verify Markdown contains final Russian segments and excludes partial preview lines.
-- Verify a meeting can be named after Stop and the re-exported Markdown uses the updated title.
+- Verify a meeting can be named after Stop from the main `Meeting title` field by pressing Enter, and the re-exported Markdown uses the updated title.
+- Verify `Show in Finder` and `Copy path` are available from the left recent-recordings row context menu.
 - Verify no audio, SQLite, REST/MCP, telemetry, or cloud artifacts are created by Markdown export.
 - Verify REST transcript matches Markdown.
 - Verify MCP transcript matches REST.

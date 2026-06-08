@@ -32,7 +32,6 @@ final class RecordingShellViewModel: ObservableObject {
     @Published private(set) var recentSessions: [CompletedRecordingSession] = []
     @Published private(set) var copyFeedbackText: String?
     @Published private(set) var markdownExportFeedbackText: String?
-    @Published var completedTitleDraft = ""
 
     private let controller: RecordingSessionController
     private let transcriptPreviewController: LiveTranscriptPreviewController
@@ -113,7 +112,6 @@ final class RecordingShellViewModel: ObservableObject {
         copyFeedbackText = nil
         markdownExportFeedbackText = nil
         pendingMarkdownExportSession = nil
-        completedTitleDraft = ""
         state = .starting
         elapsedText = "00:00"
 
@@ -180,10 +178,12 @@ final class RecordingShellViewModel: ObservableObject {
         }
     }
 
-    func saveCompletedTitle() {
-        guard let lastCompletedSession,
+    func saveMeetingTitleFromCurrentField() {
+        guard state == .stopped,
+              let lastCompletedSession,
+              meetingTitle.trimmingCharacters(in: .whitespacesAndNewlines) != lastCompletedSession.title,
               let renamedSession = lastCompletedSession.renamed(
-                to: completedTitleDraft,
+                to: meetingTitle,
                 markdownFileURL: lastCompletedSession.markdownFileURL
               ) else {
             return
@@ -299,7 +299,7 @@ final class RecordingShellViewModel: ObservableObject {
         let exportedSession = await exportMarkdownIfPossible(for: completedSession)
         await recordingStore.save(exportedSession)
         recentSessions = await recordingStore.recentSessions(limit: 8)
-        completedTitleDraft = exportedSession.title
+        meetingTitle = exportedSession.title
     }
 
     private func exportMarkdownIfPossible(for completedSession: CompletedRecordingSession) async -> CompletedRecordingSession {
@@ -355,7 +355,11 @@ struct RecordingShellView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            RecentRecordingsSidebar(sessions: viewModel.recentSessions)
+            RecentRecordingsSidebar(
+                sessions: viewModel.recentSessions,
+                onRevealMarkdown: viewModel.revealMarkdownFile,
+                onCopyMarkdownPath: viewModel.copyMarkdownPath
+            )
                 .frame(width: 260)
 
             Divider()
@@ -376,11 +380,7 @@ struct RecordingShellView: View {
                     if let lastCompletedSession = viewModel.lastCompletedSession {
                         CompletedSessionSummary(
                             session: lastCompletedSession,
-                            titleDraft: $viewModel.completedTitleDraft,
                             markdownExportFeedbackText: viewModel.markdownExportFeedbackText,
-                            onSaveTitle: viewModel.saveCompletedTitle,
-                            onRevealMarkdown: viewModel.revealMarkdownFile,
-                            onCopyMarkdownPath: viewModel.copyMarkdownPath,
                             onRetryMarkdownExport: viewModel.retryMarkdownExport
                         )
                     }
@@ -419,6 +419,9 @@ struct RecordingShellView: View {
             TextField("Meeting title", text: $viewModel.meetingTitle)
                 .textFieldStyle(.roundedBorder)
                 .accessibilityLabel("Meeting title")
+                .onSubmit {
+                    viewModel.saveMeetingTitleFromCurrentField()
+                }
 
             TextField("Add a quick note for yourself", text: $viewModel.quickNote, axis: .vertical)
                 .lineLimit(3, reservesSpace: true)
@@ -442,7 +445,6 @@ struct RecordingShellView: View {
             Button(viewModel.primaryButtonTitle) {
                 viewModel.primaryAction()
             }
-            .keyboardShortcut(.defaultAction)
             .disabled(!viewModel.canUsePrimaryAction)
             .controlSize(.large)
             .accessibilityLabel(viewModel.state.isRecording ? "Stop recording" : "Start recording")
@@ -465,11 +467,7 @@ struct RecordingShellView: View {
 
 struct CompletedSessionSummary: View {
     let session: CompletedRecordingSession
-    @Binding var titleDraft: String
     let markdownExportFeedbackText: String?
-    let onSaveTitle: () -> Void
-    let onRevealMarkdown: (CompletedRecordingSession) -> Void
-    let onCopyMarkdownPath: (CompletedRecordingSession) -> Void
     let onRetryMarkdownExport: () -> Void
 
     var body: some View {
@@ -498,24 +496,6 @@ struct CompletedSessionSummary: View {
                 CompletedSessionMetric(label: "Transcript preview", value: "\(session.finalSegmentCount) final, \(session.partialSegmentCount) live")
             }
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Meeting title")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                HStack(spacing: 8) {
-                    TextField("Meeting title", text: $titleDraft)
-                        .textFieldStyle(.roundedBorder)
-                        .accessibilityLabel("Completed meeting title")
-                    Button("Save title") {
-                        onSaveTitle()
-                    }
-                    .disabled(titleDraft.trimmingCharacters(in: .whitespacesAndNewlines) == session.title)
-                }
-                Text("Use this if you started recording first and named the meeting afterwards.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
             if let stablePreviewText = session.stablePreviewText {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Latest stable line")
@@ -539,8 +519,6 @@ struct CompletedSessionSummary: View {
             MarkdownExportSummary(
                 session: session,
                 feedbackText: markdownExportFeedbackText,
-                onRevealMarkdown: onRevealMarkdown,
-                onCopyMarkdownPath: onCopyMarkdownPath,
                 onRetryMarkdownExport: onRetryMarkdownExport
             )
         }
@@ -553,8 +531,6 @@ struct CompletedSessionSummary: View {
 struct MarkdownExportSummary: View {
     let session: CompletedRecordingSession
     let feedbackText: String?
-    let onRevealMarkdown: (CompletedRecordingSession) -> Void
-    let onCopyMarkdownPath: (CompletedRecordingSession) -> Void
     let onRetryMarkdownExport: () -> Void
 
     var body: some View {
@@ -569,16 +545,6 @@ struct MarkdownExportSummary: View {
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
-
-                HStack(spacing: 8) {
-                    Button("Show in Finder") {
-                        onRevealMarkdown(session)
-                    }
-
-                    Button("Copy path") {
-                        onCopyMarkdownPath(session)
-                    }
-                }
             } else {
                 Text(feedbackText ?? "Markdown was not saved")
                     .font(.callout.weight(.semibold))
@@ -613,6 +579,8 @@ struct CompletedSessionMetric: View {
 
 struct RecentRecordingsSidebar: View {
     let sessions: [CompletedRecordingSession]
+    let onRevealMarkdown: (CompletedRecordingSession) -> Void
+    let onCopyMarkdownPath: (CompletedRecordingSession) -> Void
     @State private var isSessionGroupExpanded = true
 
     var body: some View {
@@ -631,7 +599,11 @@ struct RecentRecordingsSidebar: View {
                 DisclosureGroup(isExpanded: $isSessionGroupExpanded) {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(sessions) { session in
-                            RecentRecordingTreeRow(session: session)
+                            RecentRecordingTreeRow(
+                                session: session,
+                                onRevealMarkdown: onRevealMarkdown,
+                                onCopyMarkdownPath: onCopyMarkdownPath
+                            )
                         }
                     }
                     .padding(.top, 6)
@@ -657,6 +629,8 @@ struct RecentRecordingsSidebar: View {
 
 struct RecentRecordingTreeRow: View {
     let session: CompletedRecordingSession
+    let onRevealMarkdown: (CompletedRecordingSession) -> Void
+    let onCopyMarkdownPath: (CompletedRecordingSession) -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -681,6 +655,17 @@ struct RecentRecordingTreeRow: View {
         .padding(.leading, 8)
         .padding(.trailing, 6)
         .contentShape(Rectangle())
+        .contextMenu {
+            Button("Show in Finder") {
+                onRevealMarkdown(session)
+            }
+            .disabled(session.markdownFileURL == nil)
+
+            Button("Copy path") {
+                onCopyMarkdownPath(session)
+            }
+            .disabled(session.markdownFileURL == nil)
+        }
         .accessibilityElement(children: .combine)
     }
 }
