@@ -6,6 +6,24 @@ This workflow defines how Meeting007 work moves from business intent to `main`. 
 
 The user's proposed flow is strong. The improvement is to add an explicit intake step and a release-captain gate before merge. That keeps parallel work coordinated and prevents branches from reaching `main` with missing documentation, tests, or acceptance.
 
+## Mandatory Subagent Rule
+
+Codex must use the specialized subagents for repository work instead of self-approving role gates.
+
+Required behavior:
+
+- Before implementation, spawn or message the relevant role subagents for the workstream.
+- Do not start coding until BA requirements, UX impact when relevant, architecture impact, and acceptance scenarios are available.
+- UI-affecting work always requires UX Designer and Acceptance/QA subagents.
+- Storage, privacy, API/MCP, audio, STT, performance, CI/build, or documentation-sensitive work requires the matching specialist subagent listed in this workflow.
+- If subagent tooling is unavailable, mark the workstream blocked and ask the user whether to proceed without the required gate.
+- Record subagent outputs or a concise summary of them in `docs/workstreams.md`, `docs/design/*`, `docs/product/*`, or the PR notes before user acceptance.
+- If implementation diverges from a subagent recommendation, document the product reason and get user acceptance before merge.
+
+Gate:
+
+- A branch is not ready for user acceptance when required subagent review is missing, stale, or contradicted by the implementation.
+
 ```mermaid
 flowchart TD
     Intake["0. Intake / Workstream Setup"] --> BA["1. Business Analyst"]
@@ -43,10 +61,12 @@ Required outputs:
 - Scope and out-of-scope.
 - Target backlog priority from `docs/product/prioritized-backlog.md`.
 - Owner/agent roles assigned.
+- Required subagents listed by role, with status: pending, complete, skipped with reason, or blocked.
 
 Gate:
 
 - Work does not start until the user outcome and expected acceptance path are clear.
+- Work does not start until required subagent roles are either completed or explicitly marked blocked/skipped with a documented user-approved reason.
 
 ## 1. Business Analyst
 
@@ -94,6 +114,7 @@ Required outputs:
 Gate:
 
 - UI-affecting development does not start until the target experience, states, and acceptance criteria are documented.
+- UI-affecting development does not start until a UX Designer subagent has reviewed the target experience and its output is captured in the workstream or design docs.
 - Backend-only work may skip UX design, but the workstream must explicitly say UX is not affected.
 - UI-affecting development does not start if the same concept is editable in multiple places without a deliberate design reason.
 - UI-affecting development does not start if row-specific actions are placed as global buttons without evaluating context menus or native row actions.
@@ -160,6 +181,7 @@ Required outputs:
 Gate:
 
 - Developer does not start implementation until top-level acceptance scenarios exist.
+- Developer does not start implementation until an Acceptance Tester or QA subagent has produced a checklist or Given/When/Then scenarios for the workstream.
 
 ## 5. Developer Branch + TDD/BDD
 
@@ -221,6 +243,7 @@ Required outputs:
 Gate:
 
 - User acceptance is not requested until BA acceptance is complete and UX acceptance is complete for user-facing changes.
+- User acceptance is not requested until required subagent findings are reflected in implementation or documented as deliberately deferred.
 - User acceptance is not requested for visible UI if the UX reviewer sees avoidable amateur patterns, duplicated controls, misplaced actions, or non-native macOS behavior.
 
 ## 8. User Acceptance

@@ -11,6 +11,8 @@ Delivery gates and agent roles are defined in `docs/process/agent-workflow.md`.
 - Link to technical docs or ADRs when implementation details matter.
 - Keep status current when a workstream starts, changes direction, is blocked, or completes.
 - Do not mark work ready for `main` until verification is documented.
+- Do not mark work ready for review until required subagent reviews are complete and summarized.
+- UI-affecting work must include UX Designer and Acceptance/QA subagent notes before code is written.
 - Revisit skills/MCP needs when a workstream reaches one of the tooling triggers below.
 - After an accepted workstream is merged to `main`, show the user the top 3 next backlog options so they can choose the next step.
 
@@ -38,11 +40,26 @@ Remind the user to consider extra skills or MCP/connectors when these moments ar
 - Docs touched: <BRD, architecture, ADR, testing, privacy, etc.>
 - Verification: <commands/manual QA required and latest result>
 - Gates: <BA / UX / Architecture / Specialist Reviews / Acceptance Tests / Development / Integration / BA+UX Acceptance / User Acceptance / Merge>
+- Subagents: <required roles and status, plus links/summaries of outputs>
 - Open decisions: <business/product decisions still needed>
 - Handoff notes: <context needed for parallel work>
 ```
 
 ## Current Workstreams
+
+## Process Guardrail: Mandatory Subagent Gates
+
+- Status: Ready for Review
+- Owner: Codex
+- User outcome: Prevent future work from bypassing the agreed BA, UX, architecture, QA, and specialist review flow.
+- Scope: Repository rules now require relevant subagents before implementation, especially UX Designer and Acceptance/QA for UI changes; workstreams must record required subagent roles and status.
+- Out of scope: Changing product behavior or app code.
+- Docs touched: `AGENTS.md`, `docs/process/agent-workflow.md`, `docs/workstreams.md`.
+- Verification: Documentation-only change; repository rules reviewed locally.
+- Gates: Process update drafted; user acceptance pending; merge pending.
+- Subagents: Not required for this meta-process rule update; the purpose is to make future product work require them.
+- Open decisions: Whether to promote the role prompts in `docs/agents/` into reusable Codex skills later.
+- Handoff notes: If future required subagent tooling is unavailable, mark the workstream blocked and ask the user before implementing.
 
 ## Configurable Markdown Transcript Folder
 

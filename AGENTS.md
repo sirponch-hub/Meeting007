@@ -19,6 +19,7 @@ These rules apply to all AI-assisted work in this repository. Reusable role prom
 - Add or update tests for behavior changes.
 - Untested work must not be merged into `main`.
 - Feature work must happen on a branch after business requirements, UX impact, architecture impact, and acceptance scenarios are documented.
+- Feature work must use the specialist subagents defined in `docs/process/agent-workflow.md` before implementation. Do not self-approve BA, UX, architecture, QA, or specialist gates when a matching subagent can be used.
 - Specialist review is required when work affects audio capture, local STT, privacy/security, CI/build, performance, QA automation, or user-facing documentation.
 - Run the relevant verification command before handing work back. If checks cannot run, state why and mark the work as not ready for `main`.
 - Do not commit generated build outputs, audio recordings, model files, secrets, tokens, local databases, or user transcripts.
@@ -34,6 +35,8 @@ These rules apply to all AI-assisted work in this repository. Reusable role prom
 - Keep decisions documented so another engineer or agent can continue without rediscovering context.
 - After user acceptance, merge, and final verification, always present the user with the top 3 next backlog options in business language so they can choose the next step.
 - For UI changes, challenge weak UX before coding. Translate design concerns into user workflow impact: speed, confidence, discoverability, reduced clutter, native macOS expectations, and fewer mistakes.
+- For UI changes, always run the UX Designer subagent and Acceptance/QA subagent before coding. If subagent tooling is unavailable, stop and tell the user the work is blocked by the missing review path instead of implementing from personal judgment.
+- When subagents are used, summarize their recommendations in `docs/workstreams.md` or the relevant design/product document before requesting user acceptance.
 
 ## Privacy And Security Rules
 
