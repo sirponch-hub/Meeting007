@@ -46,14 +46,14 @@ Remind the user to consider extra skills or MCP/connectors when these moments ar
 
 ## Markdown Transcript Export After Stop
 
-- Status: Ready for Review
+- Status: Done
 - Owner: Codex + BA/UX/Architecture/QA agents
 - User outcome: After stopping a recording, the user owns a local Markdown transcript file and can see exactly where it was saved.
 - Scope: Local Markdown file writer, `~/Documents/Meeting007/Transcripts/` default folder, date/title/UUID filename, UTF-8 Markdown generated from stopped preview transcript, `transcript_source: local_preview` metadata, saved-path UI, post-stop title edit from the main title field with Enter-to-save and re-export, left-row context menu actions for `Show in Finder` and `Copy path`, retry on export failure.
 - Out of scope: SQLite, REST/MCP, search, real microphone/system audio capture, real STT, raw audio persistence, cloud sync, telemetry, configurable export folder.
 - Docs touched: `docs/product/user-steps.md`, `docs/product/prioritized-backlog.md`, `docs/architecture.md`, `docs/testing.md`, `docs/security-privacy.md`, `docs/workstreams.md`.
-- Verification: `swift run Meeting007CoreChecks` passed; `swift build --product Meeting007App` passed.
-- Gates: BA accepted local Markdown ownership scope; UX accepted non-modal saved-path/retry UI; Architecture accepted `TranscriptFileWriting` boundary and architecture docs; QA accepted writer checks and scoped residual risk; user acceptance pending; merge pending.
+- Verification: `swift run Meeting007CoreChecks` passed; `swift build --product Meeting007App` passed after merge to `main`.
+- Gates: BA accepted local Markdown ownership scope; UX accepted non-modal saved-path/retry UI plus main-title Enter-to-save and left-row context menu actions; Architecture accepted `TranscriptFileWriting` boundary and architecture docs; QA accepted writer checks and scoped residual risk; user accepted; merge complete.
 - Open decisions: Later storage-index slice will add SQLite; settings can later make export folder configurable.
 - Handoff notes: This first slice exports final segments from the current local preview transcript. Partial preview lines remain visible in app/copy flows but are excluded from final Markdown. If the user names the meeting after Stop in the main title field and presses Enter, the app saves a new Markdown export with the updated title and updates the visible saved path.
 
