@@ -431,7 +431,7 @@ struct RecordingShellView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         quickNoteDisclosure
-                        TranscriptFolderSettingsPanel(
+                        SettingsPanel(
                             folderURL: viewModel.transcriptFolderURL,
                             feedbackText: viewModel.transcriptStorageFeedbackText,
                             onChooseFolder: viewModel.chooseTranscriptFolder,
@@ -572,7 +572,7 @@ struct RecordingIconButton: View {
     }
 }
 
-struct TranscriptFolderSettingsPanel: View {
+struct SettingsPanel: View {
     let folderURL: URL
     let feedbackText: String?
     let onChooseFolder: () -> Void
@@ -582,64 +582,90 @@ struct TranscriptFolderSettingsPanel: View {
 
     var body: some View {
         DisclosureGroup {
-            VStack(alignment: .leading, spacing: 10) {
-                Text(folderURL.path)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .textSelection(.enabled)
-                    .accessibilityLabel("Current Markdown transcript folder \(folderURL.path)")
-
-                HStack(spacing: 8) {
-                    Button {
-                        onChooseFolder()
-                    } label: {
-                        Label("Change", systemImage: "folder.badge.gearshape")
-                    }
-                    .help("Choose a different folder for new Markdown transcripts.")
-
-                    Button {
-                        onRevealFolder()
-                    } label: {
-                        Label("Reveal", systemImage: "folder")
-                    }
-                    .help("Show the current transcript folder in Finder.")
-
-                    Button {
-                        onCopyPath()
-                    } label: {
-                        Label("Copy Path", systemImage: "doc.on.doc")
-                    }
-                    .help("Copy the current transcript folder path.")
-
-                    Spacer()
-
-                    Button {
-                        onResetToDefault()
-                    } label: {
-                        Label("Reset", systemImage: "arrow.counterclockwise")
-                    }
-                    .help("Use the default Meeting007 transcript folder for new exports.")
-                }
-
-                if let feedbackText {
-                    Text(feedbackText)
-                        .font(.callout.weight(.medium))
-                        .foregroundStyle(.secondary)
-                }
-
-                Text("Changing this folder affects new Markdown exports only. Existing transcript files stay where they are.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            TranscriptFolderSettingRow(
+                folderURL: folderURL,
+                feedbackText: feedbackText,
+                onChooseFolder: onChooseFolder,
+                onRevealFolder: onRevealFolder,
+                onCopyPath: onCopyPath,
+                onResetToDefault: onResetToDefault
+            )
             .padding(.top, 8)
         } label: {
-            Label("Transcript folder", systemImage: "folder")
+            Label("Settings", systemImage: "gearshape")
                 .font(.callout.weight(.semibold))
         }
         .padding(12)
         .background(.thinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+struct TranscriptFolderSettingRow: View {
+    let folderURL: URL
+    let feedbackText: String?
+    let onChooseFolder: () -> Void
+    let onRevealFolder: () -> Void
+    let onCopyPath: () -> Void
+    let onResetToDefault: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Label("Transcript folder", systemImage: "folder")
+                    .font(.callout.weight(.semibold))
+                Spacer()
+            }
+
+            Text(folderURL.path)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .textSelection(.enabled)
+                .accessibilityLabel("Current Markdown transcript folder \(folderURL.path)")
+
+            HStack(spacing: 8) {
+                Button {
+                    onChooseFolder()
+                } label: {
+                    Label("Change", systemImage: "folder.badge.gearshape")
+                }
+                .help("Choose a different folder for new Markdown transcripts.")
+
+                Button {
+                    onRevealFolder()
+                } label: {
+                    Label("Reveal", systemImage: "folder")
+                }
+                .help("Show the current transcript folder in Finder.")
+
+                Button {
+                    onCopyPath()
+                } label: {
+                    Label("Copy Path", systemImage: "doc.on.doc")
+                }
+                .help("Copy the current transcript folder path.")
+
+                Spacer()
+
+                Button {
+                    onResetToDefault()
+                } label: {
+                    Label("Reset", systemImage: "arrow.counterclockwise")
+                }
+                .help("Use the default Meeting007 transcript folder for new exports.")
+            }
+
+            if let feedbackText {
+                Text(feedbackText)
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            Text("Changing this folder affects new Markdown exports only. Existing transcript files stay where they are.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 }
 

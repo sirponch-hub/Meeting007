@@ -49,13 +49,13 @@ Remind the user to consider extra skills or MCP/connectors when these moments ar
 - Status: Ready for Review
 - Owner: Codex + BA/UX/Architecture/QA agents
 - User outcome: User can save new owned Markdown transcripts into the folder where they actually work, such as a local knowledge base or explicitly chosen sync folder.
-- Scope: Local folder preference, default folder preservation, native folder picker, write-access validation, reveal/copy/reset actions, new Markdown exports use selected folder, no silent migration of existing files.
+- Scope: Local folder preference inside the main-window `Settings` section, default folder preservation, native folder picker, write-access validation, reveal/copy/reset actions, new Markdown exports use selected folder, no silent migration of existing files.
 - Out of scope: Dedicated Settings window, migrating existing Markdown files, sandbox security-scoped bookmarks, SQLite folder metadata, REST/MCP folder controls, cloud defaults.
 - Docs touched: `docs/product/user-steps.md`, `docs/architecture.md`, `docs/security-privacy.md`, `docs/testing.md`, `docs/workstreams.md`.
 - Verification: `swift run Meeting007CoreChecks` passed; `swift build --product Meeting007App` passed.
 - Gates: BA scope documented; UX implementation complete; architecture boundary documented; automated checks passed; user acceptance pending; merge pending.
 - Open decisions: Whether the first migration slice only moves known Meeting007 folders or also supports user-selected source folders; whether production sandboxing requires security-scoped bookmarks.
-- Handoff notes: The selected path is stored in app preferences through `MarkdownTranscriptFolderSettings`. Changing the folder affects future exports only.
+- Handoff notes: The selected path is stored in app preferences through `MarkdownTranscriptFolderSettings`. Changing the folder affects future exports only. Folder controls belong in `Settings`, not the primary recording/transcript flow.
 
 ## Premium UI IA Cleanup
 
