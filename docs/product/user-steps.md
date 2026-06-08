@@ -186,9 +186,32 @@ First implementation slice:
 - The selected folder is stored locally in app preferences and used for new Markdown exports.
 - The app validates write access by creating the folder if needed and writing a temporary probe file.
 - Existing Markdown transcript files are not moved when the folder changes.
-- This slice does not add file migration, sandbox security bookmarks, SQLite storage, REST/MCP folder controls, or a dedicated Settings window.
+- This slice does not add Markdown migration, sandbox security bookmarks, SQLite storage, REST/MCP folder controls, or a dedicated Settings window.
 
-## Step 11: Find Past Meetings
+## Step 11: Migrate Existing Markdown Transcripts
+
+- User goal: move older Markdown transcripts into the currently selected transcript folder when the user wants one organized location.
+- User action: starts `Migrate existing Markdown transcripts` from storage settings.
+- App response: previews source folders, destination folder, number of files, conflicts, and any files that cannot be moved.
+- Success result: user explicitly confirms the migration and old Markdown transcripts are moved safely into the active folder.
+- Acceptance criteria:
+  - Migration is never triggered automatically by changing the transcript folder.
+  - User sees a preview before any file is moved.
+  - User explicitly confirms the migration.
+  - App avoids silent overwrites when destination filenames already exist.
+  - App preserves Markdown file contents and meeting metadata.
+  - App reports moved, skipped, conflicted, and failed files.
+  - App keeps source files intact until each destination file is written and verified.
+  - If migration is interrupted, app shows a recoverable status and does not lose transcript files.
+  - Migration remains local-only and does not upload transcripts.
+
+Planned implementation slice:
+
+- Migration starts as a separate storage action after configurable folders are stable.
+- The first slice may support migration from known Meeting007 transcript folders only.
+- A later slice can add user-selected source folders and SQLite index reconciliation.
+
+## Step 12: Find Past Meetings
 
 - User goal: return to a previous transcript quickly.
 - User action: opens Meeting007 and searches or selects a meeting from history.
@@ -199,7 +222,7 @@ First implementation slice:
   - Meeting list shows date, title, and recording state.
   - Opening a past meeting does not require internet access.
 
-## Step 12: Access Transcript From Other Apps
+## Step 13: Access Transcript From Other Apps
 
 - User goal: use meeting data from scripts, tools, or AI assistants.
 - User action: enables local REST/MCP access and uses a local client.
@@ -211,7 +234,7 @@ First implementation slice:
   - Services bind to localhost only.
   - Access requires a local token.
 
-## Step 13: Control Local Data
+## Step 14: Control Local Data
 
 - User goal: know what is stored and remove it when needed.
 - User action: opens storage/privacy settings.
@@ -220,10 +243,11 @@ First implementation slice:
 - Acceptance criteria:
   - User can open the transcript folder.
   - User can change the Markdown transcript folder for new exports.
+  - User can explicitly migrate existing Markdown transcripts when they want old files to follow the active folder.
   - User can delete a meeting transcript and index entry.
   - Raw audio retention behavior is explicit before any persistent audio storage ships.
 
-## Step 14: Recover From Problems
+## Step 15: Recover From Problems
 
 - User goal: understand and fix common blockers without technical diagnosis.
 - User action: sees an error or missing capability.
@@ -234,10 +258,11 @@ First implementation slice:
   - Unsupported Mac error explains that v1 requires Apple Silicon.
   - Missing local model error offers a clear local installation path.
   - Unavailable transcript folder error explains where new Markdown files cannot be saved and how to choose another folder.
+  - Migration errors explain which Markdown files moved, which did not, and how to retry safely.
   - Calendar connection errors keep manual recording available.
   - Failures do not silently discard transcript data.
 
-## Step 15: Verify A Meeting End To End
+## Step 16: Verify A Meeting End To End
 
 - User goal: trust that Meeting007 worked.
 - User action: records a short test meeting, copies recent context, stops recording, and opens the saved transcript.
@@ -248,6 +273,7 @@ First implementation slice:
   - Copy Last 5 Minutes works.
   - Final Markdown matches the app transcript.
   - Final Markdown is saved to the selected transcript folder.
+  - Existing Markdown migration, when run, preserves file contents and reports any conflicts.
   - Calendar-connected meetings carry title and participant metadata when the user connected Google Calendar.
   - REST/MCP transcript matches the saved transcript.
   - No data leaves the Mac.

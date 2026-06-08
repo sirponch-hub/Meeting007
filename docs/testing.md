@@ -70,6 +70,9 @@ Use deterministic fixtures:
 - Verify Markdown appears under `~/Documents/Meeting007/Transcripts/`.
 - Change Markdown transcript folder and verify new exports use the selected folder.
 - Verify existing Markdown transcripts are not moved silently after changing the folder.
+- Verify Markdown migration is a separate action and requires explicit confirmation when implemented.
+- Verify Markdown migration reports moved, skipped, conflicted, and failed files when implemented.
+- Verify interrupted Markdown migration does not lose transcript files when implemented.
 - Verify unavailable or read-only transcript folder shows a recoverable error and does not discard transcript text.
 - Verify Markdown filename is date/title/UUID based and filesystem-safe.
 - Verify Markdown contains final Russian segments and excludes partial preview lines.

@@ -83,6 +83,14 @@ Current implemented configurable storage boundary:
 - `RecordingShellViewModel` rebuilds `LocalMarkdownTranscriptFileWriter` when the selected folder changes so future exports use the new folder.
 - The app stores a filesystem path only. Sandboxed production builds may require security-scoped bookmarks before distribution.
 
+Planned Markdown migration boundary:
+
+- Migration is a separate module from folder selection and Markdown export.
+- Migration must preview source files, destination files, conflicts, and expected actions before writing.
+- Migration must copy/write each destination file and verify it before removing the source file.
+- Migration must avoid silent overwrites and produce a local result report.
+- SQLite index reconciliation belongs to the future storage-index slice and must be designed before migration updates indexed paths.
+
 Meeting IDs are UUIDs. Current Markdown filenames use UTC start time, transliterated title slug, and short UUID:
 
 ```text

@@ -54,7 +54,7 @@ Remind the user to consider extra skills or MCP/connectors when these moments ar
 - Docs touched: `docs/product/user-steps.md`, `docs/architecture.md`, `docs/security-privacy.md`, `docs/testing.md`, `docs/workstreams.md`.
 - Verification: `swift run Meeting007CoreChecks` passed; `swift build --product Meeting007App` passed.
 - Gates: BA scope documented; UX implementation complete; architecture boundary documented; automated checks passed; user acceptance pending; merge pending.
-- Open decisions: Whether a future migration flow should offer to move old Markdown transcripts after explicit confirmation; whether production sandboxing requires security-scoped bookmarks.
+- Open decisions: Whether the first migration slice only moves known Meeting007 folders or also supports user-selected source folders; whether production sandboxing requires security-scoped bookmarks.
 - Handoff notes: The selected path is stored in app preferences through `MarkdownTranscriptFolderSettings`. Changing the folder affects future exports only.
 
 ## Premium UI IA Cleanup
