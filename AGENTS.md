@@ -9,6 +9,7 @@ These rules apply to all AI-assisted work in this repository. Reusable role prom
 - Transcripts must remain user-owned. Markdown export is a core product surface, not a convenience feature.
 - Local REST and MCP access must use the same local source of truth as the app.
 - Manual start/stop from the main app window must remain reliable even after calendar integration, hotkeys, or menu bar controls exist.
+- User-facing surfaces must meet a premium native macOS product bar. Do not accept student-prototype UI, duplicated controls, random visible buttons, web-form layouts, or non-native interaction behavior.
 
 ## Engineering Rules
 
@@ -31,6 +32,7 @@ These rules apply to all AI-assisted work in this repository. Reusable role prom
 - For user-facing changes, explain choices through convenience, clarity, speed during meetings, trust, privacy, and recovery.
 - Keep decisions documented so another engineer or agent can continue without rediscovering context.
 - After user acceptance, merge, and final verification, always present the user with the top 3 next backlog options in business language so they can choose the next step.
+- For UI changes, challenge weak UX before coding. Translate design concerns into user workflow impact: speed, confidence, discoverability, reduced clutter, native macOS expectations, and fewer mistakes.
 
 ## Privacy And Security Rules
 

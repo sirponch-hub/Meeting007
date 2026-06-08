@@ -69,7 +69,7 @@ Communication rule:
 
 ## 2. UX Designer
 
-Purpose: make user-facing work convenient, calm, fast, and trustworthy before architecture and development harden the experience.
+Purpose: make user-facing work convenient, calm, fast, trustworthy, and visually excellent before architecture and development harden the experience. The UX role is accountable for product design quality, not just button placement.
 
 Use this role when the change affects:
 
@@ -80,19 +80,28 @@ Required outputs:
 - User flow in business language.
 - Screen/state inventory: empty, loading, active, success, error, blocked, permission-denied.
 - Interaction model: primary action, secondary actions, hotkeys/menu bar behavior when relevant.
+- Information architecture: left navigation, main work surface, details/inspector, toolbar, context menus, settings, and system surfaces.
+- Native macOS behavior: focus, Enter/Escape behavior, context menus, file reveal/copy path behavior, copy/paste, and keyboard expectations.
+- Visual hierarchy and layout rationale.
+- `docs/design-quality-gate.md` pass/fail review.
 - UX acceptance criteria.
 - Copy/microcopy for sensitive moments such as permissions, local-only privacy, recording state, and errors.
 - Accessibility and keyboard expectations.
 - Visual constraints for developer implementation.
+- Quality-bar review: explicit notes on why the design will not feel like a student prototype, web form, or random button collection.
 
 Gate:
 
 - UI-affecting development does not start until the target experience, states, and acceptance criteria are documented.
 - Backend-only work may skip UX design, but the workstream must explicitly say UX is not affected.
+- UI-affecting development does not start if the same concept is editable in multiple places without a deliberate design reason.
+- UI-affecting development does not start if row-specific actions are placed as global buttons without evaluating context menus or native row actions.
 
 Design rule:
 
 - Meeting007 is a work surface, not a marketing site. Optimize for clarity, repeated use, low meeting-time friction, and confidence that data stays local.
+- Meeting007 should feel like a premium native macOS productivity app. Optimize for composed layout, clear hierarchy, context-aware actions, high information density, and native interaction behavior.
+- If the designer would not be proud to show the screen as a polished shipping product, the workstream returns to UX before development.
 
 ## 3. System Analyst / Architect
 
@@ -205,10 +214,12 @@ Required outputs:
 - UX acceptance note when the change affects visible user experience.
 - Confirmation that acceptance criteria are met or list of gaps.
 - Confirmation that documentation matches delivered behavior.
+- UX confirmation that implemented placement, focus behavior, keyboard behavior, context menus, spacing, and visual hierarchy match the approved design standard.
 
 Gate:
 
 - User acceptance is not requested until BA acceptance is complete and UX acceptance is complete for user-facing changes.
+- User acceptance is not requested for visible UI if the UX reviewer sees avoidable amateur patterns, duplicated controls, misplaced actions, or non-native macOS behavior.
 
 ## 8. User Acceptance
 
