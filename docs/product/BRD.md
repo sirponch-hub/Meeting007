@@ -51,6 +51,7 @@ Detailed user-step decomposition lives in [User Steps](user-steps.md). Implement
 3. User can change the folder, reveal it in Finder, copy the path, or reset to the default location.
 4. New Markdown exports use the selected folder.
 5. Existing transcript files are not moved silently.
+6. User can later choose a separate migration flow to move existing Markdown transcripts into the active folder.
 
 ### Use Google Calendar Context
 
@@ -78,6 +79,8 @@ Enhancement:
 - The app must let the user configure the Markdown transcript storage folder.
 - The app must default Markdown transcript storage to `~/Documents/Meeting007/Transcripts/` until the user chooses another local folder.
 - The app must not silently move existing transcript files when the storage folder changes.
+- The app must treat migration of existing Markdown transcripts as a separate explicit user-confirmed function.
+- Markdown migration must preview what will move, preserve transcript ownership, avoid silent overwrites, and report any files that could not be moved.
 - Google Calendar integration MVP must pull meeting title/topic and participants after explicit user connection.
 - Google Calendar enhancement must support today's meeting list, start-from-meeting, and pre-meeting Notification Center alerts.
 - Manual start/stop must remain reliable without Google Calendar.
@@ -112,6 +115,7 @@ Enhancement:
 - User can copy the last 5 minutes and the full transcript during a meeting.
 - Stopping a meeting creates a Markdown transcript and SQLite index entry.
 - User can choose the folder used for new Markdown transcript exports.
+- User can explicitly migrate existing Markdown transcripts to the active transcript folder when that separate function ships.
 - Google Calendar MVP can populate title and participants for a recording without making calendar access mandatory.
 - REST and MCP can retrieve the same transcript data.
 - No audio or transcript data leaves the Mac in the default v1 path.

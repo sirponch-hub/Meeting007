@@ -54,11 +54,15 @@ Markdown transcript export is a local-only user-owned artifact.
 - Default folder: `~/Documents/Meeting007/Transcripts/`.
 - User-selected folders are allowed for new Markdown exports after explicit user choice.
 - Existing Markdown transcripts must not be moved silently when the folder changes.
+- Moving existing Markdown transcripts requires a separate explicit migration action and user confirmation.
 - Cloud-synced folders must not become the default; they are acceptable only when the user intentionally selects one.
+- The selected folder path is stored locally in app preferences.
+- Folder validation may create the selected folder and a temporary probe file, then remove the probe file.
 - Export writes UTF-8 Markdown files only.
 - Export must not create raw audio, SQLite, REST/MCP, telemetry, cloud, or hosted-account side effects.
 - Partial preview lines are excluded from the final Markdown file unless a future product decision changes export semantics.
 - The UI must show the saved local path and make clear the file was generated from the current local transcript preview.
+- Migration must remain local-only, avoid silent overwrites, and keep source files until the destination copy is verified.
 
 ## Google Calendar
 

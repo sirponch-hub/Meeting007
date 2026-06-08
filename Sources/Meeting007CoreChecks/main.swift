@@ -14,6 +14,8 @@ struct Meeting007CoreChecks {
         checkTimestampFormatterUsesMinutesAndHours()
         checkMarkdownExportIncludesOnlyFinalSegments()
         checkMarkdownFilenameSlugUsesSafeReadableText()
+        checkMarkdownFolderSettingsDefaultAndCustomFolder()
+        checkMarkdownFolderSettingsResetRestoresDefault()
         await checkLocalMarkdownWriterCreatesFolderAndFile()
         await checkLocalMarkdownWriterUsesDistinctFilenamesForDuplicateTitles()
         await checkManualRecordingStartCreatesSession()
@@ -258,6 +260,57 @@ struct Meeting007CoreChecks {
 
         require(filename == "1970-01-01_00-00_russkaya-vstrecha-qa_12345678.md", "Filename must include date, safe title slug, short UUID, and .md extension.")
         require(MarkdownTranscriptFileStore.slug("   ") == "untitled-meeting", "Whitespace title slug must fall back to untitled-meeting.")
+    }
+
+    private static func checkMarkdownFolderSettingsDefaultAndCustomFolder() {
+        let suiteName = "Meeting007CoreChecks-\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            require(false, "Test UserDefaults suite must be available.")
+            return
+        }
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let customFolder = temporaryExportFolder()
+        let settings = MarkdownTranscriptFolderSettings(defaults: defaults)
+
+        require(settings.usesDefaultFolder, "Markdown folder settings must use default before user selection.")
+        require(settings.folderURL == MarkdownTranscriptFolderSettings.defaultFolderURL(), "Default Markdown folder must stay stable.")
+
+        do {
+            try settings.setFolderURL(customFolder)
+        } catch {
+            require(false, "Writable custom Markdown folder must be accepted: \(error)")
+        }
+
+        require(!settings.usesDefaultFolder, "Custom Markdown folder selection must be detected.")
+        require(settings.folderURL == customFolder, "Markdown folder settings must return the selected folder.")
+        require(FileManager.default.fileExists(atPath: customFolder.path), "Markdown folder validation must create the selected folder when needed.")
+    }
+
+    private static func checkMarkdownFolderSettingsResetRestoresDefault() {
+        let suiteName = "Meeting007CoreChecks-\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            require(false, "Test UserDefaults suite must be available.")
+            return
+        }
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let settings = MarkdownTranscriptFolderSettings(defaults: defaults)
+
+        do {
+            try settings.setFolderURL(temporaryExportFolder())
+        } catch {
+            require(false, "Writable custom Markdown folder must be accepted before reset: \(error)")
+        }
+
+        settings.resetToDefault()
+
+        require(settings.usesDefaultFolder, "Reset must return Markdown folder settings to default mode.")
+        require(settings.folderURL == MarkdownTranscriptFolderSettings.defaultFolderURL(), "Reset must restore the default Markdown folder URL.")
     }
 
     private static func checkLocalMarkdownWriterCreatesFolderAndFile() async {

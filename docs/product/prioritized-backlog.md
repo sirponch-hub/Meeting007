@@ -30,7 +30,7 @@ User steps:
 - Step 6: Copy Recent Context During Meeting.
 - Step 8: Stop Recording.
 - Step 9: Save Final Transcript.
-- Step 15: Verify A Meeting End To End, excluding REST/MCP until P1.
+- Step 16: Verify A Meeting End To End, excluding REST/MCP until P1.
 
 Why first:
 
@@ -59,9 +59,9 @@ User steps:
 - Step 2: Grant Recording Permissions.
 - Step 7: Copy Full Transcript During Meeting.
 - Step 10: Choose Transcript Storage Folder.
-- Step 11: Find Past Meetings.
-- Step 13: Control Local Data.
-- Step 14: Recover From Problems.
+- Step 12: Find Past Meetings.
+- Step 14: Control Local Data.
+- Step 15: Recover From Problems.
 
 Convenience improvements:
 
@@ -84,14 +84,37 @@ Definition of done:
 - User can open and change the Markdown transcript storage location for future exports.
 - Product-facing errors explain user impact and next action.
 
+## P1: Markdown Transcript Migration
+
+Goal: let the user explicitly move existing owned Markdown transcript files into the active transcript folder after changing storage location.
+
+User steps:
+
+- Step 11: Migrate Existing Markdown Transcripts.
+- Step 14: Control Local Data.
+- Step 15: Recover From Problems.
+
+Why P1:
+
+- Folder choice controls future exports, but personal archives often need cleanup once the user decides on a permanent folder.
+- Migration affects private transcript files and must be deliberate, previewed, and recoverable.
+
+Definition of done:
+
+- Migration is a separate action from folder change.
+- User sees source, destination, file count, conflicts, and expected result before confirming.
+- App does not silently overwrite files.
+- App verifies moved files and reports moved/skipped/failed items.
+- Interrupted migration does not lose transcript files.
+
 ## P1: Local Access Surface
 
 Goal: make transcripts available to other local apps and AI assistants.
 
 User steps:
 
-- Step 12: Access Transcript From Other Apps.
-- Step 15: Verify A Meeting End To End, including REST/MCP.
+- Step 13: Access Transcript From Other Apps.
+- Step 16: Verify A Meeting End To End, including REST/MCP.
 
 Why P1:
 
@@ -141,9 +164,9 @@ Goal: make the product safe to use in real work situations.
 
 User steps:
 
-- Step 13: Control Local Data.
-- Step 14: Recover From Problems.
-- Step 15: Verify A Meeting End To End with failure cases.
+- Step 14: Control Local Data.
+- Step 15: Recover From Problems.
+- Step 16: Verify A Meeting End To End with failure cases.
 
 Why P2:
 
@@ -155,6 +178,7 @@ Definition of done:
 - User can delete a meeting transcript and index entry.
 - Raw audio retention policy is explicit in settings before persistent audio storage ships.
 - User can recover when the selected Markdown folder is missing or not writable.
+- User can recover from partial Markdown migration without losing transcript files.
 - Unsupported hardware, missing local model, denied permission, and capture failure have clear user-facing recovery paths.
 - Failures do not silently discard transcript data.
 
@@ -185,12 +209,13 @@ Why P3:
 4. Local Russian STT: model install path, VAD chunking, partial/final segment pipeline.
 5. Finalization: stop flow, Markdown write, SQLite index update.
 6. First-run, permissions UX, and configurable Markdown transcript folder.
-7. Meeting history, full transcript copy, hotkey/menu bar convenience controls.
-8. Local REST API.
-9. Local MCP server.
-10. Google Calendar MVP: title/topic and participants.
-11. Calendar enhancements: today's meetings, start-from-meeting, Notification Center reminders.
-12. Data controls and recovery UX hardening.
+7. Markdown transcript migration for existing files.
+8. Meeting history, full transcript copy, hotkey/menu bar convenience controls.
+9. Local REST API.
+10. Local MCP server.
+11. Google Calendar MVP: title/topic and participants.
+12. Calendar enhancements: today's meetings, start-from-meeting, Notification Center reminders.
+13. Data controls and recovery UX hardening.
 
 ## Parallel Workstreams
 

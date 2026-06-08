@@ -70,11 +70,17 @@ Use deterministic fixtures:
 - Verify Markdown appears under `~/Documents/Meeting007/Transcripts/`.
 - Change Markdown transcript folder and verify new exports use the selected folder.
 - Verify existing Markdown transcripts are not moved silently after changing the folder.
+- Verify Markdown migration is a separate action and requires explicit confirmation when implemented.
+- Verify Markdown migration reports moved, skipped, conflicted, and failed files when implemented.
+- Verify interrupted Markdown migration does not lose transcript files when implemented.
 - Verify unavailable or read-only transcript folder shows a recoverable error and does not discard transcript text.
 - Verify Markdown filename is date/title/UUID based and filesystem-safe.
 - Verify Markdown contains final Russian segments and excludes partial preview lines.
 - Verify a meeting can be named after Stop from the main `Meeting title` field by pressing Enter, and the re-exported Markdown uses the updated title.
 - Verify `Show in Finder` and `Copy path` are available from the left recent-recordings row context menu.
+- Verify `Transcript folder` shows the active Markdown folder path.
+- Verify changing `Transcript folder` affects the next Markdown export.
+- Verify reset returns new exports to `~/Documents/Meeting007/Transcripts/`.
 - Verify no audio, SQLite, REST/MCP, telemetry, or cloud artifacts are created by Markdown export.
 - Verify REST transcript matches Markdown.
 - Verify MCP transcript matches REST.
