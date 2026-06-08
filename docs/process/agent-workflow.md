@@ -84,6 +84,7 @@ Required outputs:
 - Native macOS behavior: focus, Enter/Escape behavior, context menus, file reveal/copy path behavior, copy/paste, and keyboard expectations.
 - Visual hierarchy and layout rationale.
 - `docs/design-quality-gate.md` pass/fail review.
+- Liquid Glass/material plan following Apple's current Human Interface Guidelines, including transparency/contrast/motion fallbacks.
 - UX acceptance criteria.
 - Copy/microcopy for sensitive moments such as permissions, local-only privacy, recording state, and errors.
 - Accessibility and keyboard expectations.
@@ -101,6 +102,7 @@ Design rule:
 
 - Meeting007 is a work surface, not a marketing site. Optimize for clarity, repeated use, low meeting-time friction, and confidence that data stays local.
 - Meeting007 should feel like a premium native macOS productivity app. Optimize for composed layout, clear hierarchy, context-aware actions, high information density, and native interaction behavior.
+- When designing visible macOS surfaces, apply Apple's Liquid Glass direction where it supports hierarchy and native feel, while preserving transcript readability and accessibility.
 - If the designer would not be proud to show the screen as a polished shipping product, the workstream returns to UX before development.
 
 ## 3. System Analyst / Architect

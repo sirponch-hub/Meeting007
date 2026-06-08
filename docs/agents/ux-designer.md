@@ -67,6 +67,22 @@ Meeting007 should feel like a premium macOS productivity app built for repeated 
 - **Trust:** local-only behavior should be visible in the right moment, not repeated everywhere as defensive copy.
 - **Continuity:** common real-world flows must work even when the user acts out of ideal order, such as starting a recording before naming it.
 - **Elegance through restraint:** beauty comes from alignment, spacing, typography, proportion, native controls, clear state, and absence of clutter.
+- **Liquid Glass alignment:** use Apple's Liquid Glass design language where it supports hierarchy, navigation, controls, and premium macOS feel. Do not use glass effects as decoration or where they reduce transcript readability.
+
+## Liquid Glass Rules
+
+The designer must follow Apple's current Human Interface Guidelines for Liquid Glass.
+
+- Treat Liquid Glass as a dynamic system material for controls, navigation, sidebars, toolbars, command bars, and layered status surfaces.
+- Preserve the transcript as the primary content artifact. Long transcript text must remain highly readable and should usually sit on an opaque or sufficiently thick material.
+- Use Liquid Glass to clarify hierarchy between content and controls, not to make every panel translucent.
+- Prefer native SwiftUI/AppKit system materials and controls. Avoid fake glass made from arbitrary opacity, blur, gradients, or decorative effects.
+- Respect macOS accessibility settings: Reduce Transparency, Increase Contrast, reduced motion, light/dark appearance.
+- Specify fallback materials for accessibility settings.
+- Avoid decorative orbs, bokeh, blobs, shiny panels, or glass effects that do not serve a concrete user task.
+- Keep motion minimal and meeting-safe.
+- Verify text contrast and row selection readability before acceptance.
+- Document why each glass/material surface exists.
 
 ## Interaction Placement Rules
 
@@ -105,6 +121,8 @@ For every UI-affecting workstream, answer these before development:
 - What visible state proves the action succeeded?
 - What is hidden until needed, and why?
 - What would make this feel native on macOS?
+- Where should Liquid Glass appear, and where should it not appear?
+- What accessibility fallback is required if transparency or motion is reduced?
 - What would make this look amateur, and how is that avoided?
 
 ## Gate
@@ -118,4 +136,5 @@ UI-affecting work is ready for architecture/development only when:
 - UX acceptance criteria are testable by BA, QA, and the user.
 - Information architecture and interaction placement are explicit.
 - Native macOS behavior is specified for fields, lists, context menus, keyboard, and file actions.
+- Liquid Glass/material usage follows Apple HIG and is specified with accessibility fallbacks.
 - The design passes the visual quality bar above with no known amateur/prototype patterns.

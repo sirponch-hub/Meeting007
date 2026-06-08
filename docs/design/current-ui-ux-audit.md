@@ -42,6 +42,16 @@ The product promise is strong: local, Russian-first, user-owned transcripts. The
 - **Save/status footer:** compact saved Markdown state, path, retry if failed. It should not compete with transcript reading.
 - **Settings:** permissions, transcript folder, raw audio retention, REST/MCP access, tokens.
 
+## Liquid Glass Direction
+
+The redesign should adopt Apple's Liquid Glass design language on macOS, but only where it improves hierarchy and native feel.
+
+- Use Liquid Glass/material treatment for the sidebar, compact toolbar/header strip, transcript command bar, and lightweight saved-status surface.
+- Keep transcript text on a stable, highly readable content surface. Do not make long transcript text sit on fragile translucent material.
+- Use thicker or more opaque materials when Reduce Transparency or Increase Contrast is enabled.
+- Avoid decorative glass effects that do not correspond to a real navigation, command, or status layer.
+- Redesign manual QA must include light/dark mode, Reduce Transparency, Increase Contrast, and selected sidebar row readability.
+
 ## Immediate Redesign Backlog
 
 ### P0: IA Cleanup
@@ -84,7 +94,7 @@ The product promise is strong: local, Russian-first, user-owned transcripts. The
 ### P2: Visual Polish
 
 - Reduce boxed card count.
-- Use native macOS spacing, materials, row selection, and toolbar proportions.
+- Use native macOS spacing, Liquid Glass/material hierarchy, row selection, and toolbar proportions.
 - Keep color semantic: red for recording/failure, green/check only for saved state, accent for active controls.
 - Tighten typography, alignment, focus rings, and empty states.
 

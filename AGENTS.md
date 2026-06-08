@@ -10,6 +10,7 @@ These rules apply to all AI-assisted work in this repository. Reusable role prom
 - Local REST and MCP access must use the same local source of truth as the app.
 - Manual start/stop from the main app window must remain reliable even after calendar integration, hotkeys, or menu bar controls exist.
 - User-facing surfaces must meet a premium native macOS product bar. Do not accept student-prototype UI, duplicated controls, random visible buttons, web-form layouts, or non-native interaction behavior.
+- Visible macOS UI should follow Apple's Liquid Glass direction where appropriate, using native materials for hierarchy while preserving readability, accessibility, and calm meeting-time behavior.
 
 ## Engineering Rules
 
