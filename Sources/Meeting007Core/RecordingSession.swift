@@ -56,6 +56,10 @@ public struct RecordingSession: Equatable, Identifiable, Sendable {
     public mutating func markEnded(at date: Date) {
         endedAt = date
     }
+
+    public mutating func rename(to title: String) {
+        self.title = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Untitled meeting" : title
+    }
 }
 
 public protocol RecordingCaptureDriver: Sendable {

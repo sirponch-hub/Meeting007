@@ -16,6 +16,7 @@ Required coverage:
 - Copy full transcript.
 - Copy last 5 minutes window selection, formatted clipboard text, metadata header, and live partial markers.
 - Markdown export.
+- Markdown file writer path, filename, folder creation, temp-file cleanup, and local-only scope.
 - Completed-session runtime history after Stop.
 - In-memory history deduplication and newest-first ordering.
 - SQLite mapping and migrations.
@@ -60,6 +61,12 @@ Use deterministic fixtures:
 - Verify Copy Last 5 Minutes is disabled before transcript preview text appears.
 - Verify Copy Last 5 Minutes puts timestamped `Me`/`Others` transcript text on the clipboard.
 - Stop meeting and verify Markdown output.
+- Verify Markdown appears under `~/Documents/Meeting007/Transcripts/`.
+- Verify Markdown filename is date/title/UUID based and filesystem-safe.
+- Verify Markdown contains final Russian segments and excludes partial preview lines.
+- Verify a meeting can be named after Stop from the main `Meeting title` field by pressing Enter, and the re-exported Markdown uses the updated title.
+- Verify `Show in Finder` and `Copy path` are available from the left recent-recordings row context menu.
+- Verify no audio, SQLite, REST/MCP, telemetry, or cloud artifacts are created by Markdown export.
 - Verify REST transcript matches Markdown.
 - Verify MCP transcript matches REST.
 

@@ -21,6 +21,8 @@ Third implementation slice: completed-session runtime history after Stop. It sav
 
 Fourth implementation slice: Copy Last 5 Minutes during active recording. It copies the current local preview transcript window from the visible transcript panel with timestamps and speaker labels, without hotkey/menu bar actions yet.
 
+Fifth implementation slice: Markdown transcript export after Stop. It writes the stopped local preview transcript to `~/Documents/Meeting007/Transcripts/`, shows the saved path, and leaves SQLite/API/audio persistence out of scope.
+
 User steps:
 
 - Step 4: Start Recording Manually.

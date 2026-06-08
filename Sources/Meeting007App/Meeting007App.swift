@@ -4,6 +4,13 @@ import Meeting007Core
 
 @main
 struct Meeting007App: App {
+    init() {
+        NSApplication.shared.setActivationPolicy(.regular)
+        DispatchQueue.main.async {
+            NSApplication.shared.activate(ignoringOtherApps: true)
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             RecordingShellView(viewModel: RecordingShellViewModel())
@@ -24,12 +31,15 @@ final class RecordingShellViewModel: ObservableObject {
     @Published private(set) var hasStartedPreview = false
     @Published private(set) var recentSessions: [CompletedRecordingSession] = []
     @Published private(set) var copyFeedbackText: String?
+    @Published private(set) var markdownExportFeedbackText: String?
 
     private let controller: RecordingSessionController
     private let transcriptPreviewController: LiveTranscriptPreviewController
     private let recordingStore: any RecordingSessionStore
     private let clipboardWriter: any ClipboardWriting
+    private let transcriptFileWriter: any TranscriptFileWriting
     private let copyRecentWindowSeconds: TimeInterval = 300
+    private var pendingMarkdownExportSession: CompletedRecordingSession?
     private var timer: Timer?
     private var transcriptPreviewTimer: Timer?
 
@@ -37,12 +47,14 @@ final class RecordingShellViewModel: ObservableObject {
         controller: RecordingSessionController = RecordingSessionController(),
         transcriptPreviewController: LiveTranscriptPreviewController = LiveTranscriptPreviewController(),
         recordingStore: any RecordingSessionStore = InMemoryRecordingSessionStore(),
-        clipboardWriter: any ClipboardWriting = PasteboardClipboardWriter()
+        clipboardWriter: any ClipboardWriting = PasteboardClipboardWriter(),
+        transcriptFileWriter: any TranscriptFileWriting = LocalMarkdownTranscriptFileWriter()
     ) {
         self.controller = controller
         self.transcriptPreviewController = transcriptPreviewController
         self.recordingStore = recordingStore
         self.clipboardWriter = clipboardWriter
+        self.transcriptFileWriter = transcriptFileWriter
     }
 
     var statusText: String {
@@ -98,6 +110,8 @@ final class RecordingShellViewModel: ObservableObject {
     func start() {
         errorMessage = nil
         copyFeedbackText = nil
+        markdownExportFeedbackText = nil
+        pendingMarkdownExportSession = nil
         state = .starting
         elapsedText = "00:00"
 
@@ -116,6 +130,7 @@ final class RecordingShellViewModel: ObservableObject {
     func stop() {
         errorMessage = nil
         copyFeedbackText = nil
+        markdownExportFeedbackText = nil
         state = .stopping
         stopTimer()
         stopTranscriptPreviewTimer()
@@ -127,6 +142,58 @@ final class RecordingShellViewModel: ObservableObject {
             let nextState = await controller.stopManualRecording()
             apply(nextState)
             await saveCompletedSessionIfNeeded(state: nextState, segments: frozenSegments)
+        }
+    }
+
+    func revealMarkdownFile(for session: CompletedRecordingSession) {
+        guard let markdownFileURL = session.markdownFileURL else {
+            return
+        }
+
+        NSWorkspace.shared.activateFileViewerSelecting([markdownFileURL])
+    }
+
+    func copyMarkdownPath(for session: CompletedRecordingSession) {
+        guard let markdownFileURL = session.markdownFileURL else {
+            markdownExportFeedbackText = "Markdown path is not available yet."
+            return
+        }
+
+        if clipboardWriter.write(markdownFileURL.path) {
+            markdownExportFeedbackText = "Markdown path copied."
+        } else {
+            markdownExportFeedbackText = "Could not copy Markdown path. Try again."
+        }
+    }
+
+    func retryMarkdownExport() {
+        guard let pendingMarkdownExportSession else {
+            return
+        }
+
+        Task {
+            let exportedSession = await exportMarkdownIfPossible(for: pendingMarkdownExportSession)
+            await recordingStore.save(exportedSession)
+            recentSessions = await recordingStore.recentSessions(limit: 8)
+        }
+    }
+
+    func saveMeetingTitleFromCurrentField() {
+        guard state == .stopped,
+              let lastCompletedSession,
+              meetingTitle.trimmingCharacters(in: .whitespacesAndNewlines) != lastCompletedSession.title,
+              let renamedSession = lastCompletedSession.renamed(
+                to: meetingTitle,
+                markdownFileURL: lastCompletedSession.markdownFileURL
+              ) else {
+            return
+        }
+
+        markdownExportFeedbackText = "Saving title and updating Markdown..."
+        Task {
+            let exportedSession = await exportMarkdownIfPossible(for: renamedSession)
+            await recordingStore.save(exportedSession)
+            recentSessions = await recordingStore.recentSessions(limit: 8)
         }
     }
 
@@ -229,8 +296,30 @@ final class RecordingShellViewModel: ObservableObject {
             return
         }
 
-        await recordingStore.save(completedSession)
+        let exportedSession = await exportMarkdownIfPossible(for: completedSession)
+        await recordingStore.save(exportedSession)
         recentSessions = await recordingStore.recentSessions(limit: 8)
+        meetingTitle = exportedSession.title
+    }
+
+    private func exportMarkdownIfPossible(for completedSession: CompletedRecordingSession) async -> CompletedRecordingSession {
+        do {
+            let result = try await transcriptFileWriter.write(completedSession)
+            pendingMarkdownExportSession = nil
+            markdownExportFeedbackText = completedSession.markdownFileURL == nil ? "Markdown saved locally." : "Title saved and Markdown updated locally."
+            return CompletedRecordingSession(
+                session: completedSession.session,
+                transcript: completedSession.transcript,
+                note: completedSession.note,
+                completedAt: completedSession.completedAt,
+                isPrototypeOnly: completedSession.isPrototypeOnly,
+                markdownFileURL: result.fileURL
+            ) ?? completedSession
+        } catch {
+            pendingMarkdownExportSession = completedSession
+            markdownExportFeedbackText = "Markdown was not saved. Your transcript preview is still available in this window."
+            return completedSession
+        }
     }
 
     private func updateElapsed() {
@@ -266,7 +355,11 @@ struct RecordingShellView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            RecentRecordingsSidebar(sessions: viewModel.recentSessions)
+            RecentRecordingsSidebar(
+                sessions: viewModel.recentSessions,
+                onRevealMarkdown: viewModel.revealMarkdownFile,
+                onCopyMarkdownPath: viewModel.copyMarkdownPath
+            )
                 .frame(width: 260)
 
             Divider()
@@ -285,7 +378,11 @@ struct RecordingShellView: View {
                         onCopyLastFiveMinutes: viewModel.copyLastFiveMinutes
                     )
                     if let lastCompletedSession = viewModel.lastCompletedSession {
-                        CompletedSessionSummary(session: lastCompletedSession)
+                        CompletedSessionSummary(
+                            session: lastCompletedSession,
+                            markdownExportFeedbackText: viewModel.markdownExportFeedbackText,
+                            onRetryMarkdownExport: viewModel.retryMarkdownExport
+                        )
                     }
                 }
                 .padding(28)
@@ -322,6 +419,9 @@ struct RecordingShellView: View {
             TextField("Meeting title", text: $viewModel.meetingTitle)
                 .textFieldStyle(.roundedBorder)
                 .accessibilityLabel("Meeting title")
+                .onSubmit {
+                    viewModel.saveMeetingTitleFromCurrentField()
+                }
 
             TextField("Add a quick note for yourself", text: $viewModel.quickNote, axis: .vertical)
                 .lineLimit(3, reservesSpace: true)
@@ -345,7 +445,6 @@ struct RecordingShellView: View {
             Button(viewModel.primaryButtonTitle) {
                 viewModel.primaryAction()
             }
-            .keyboardShortcut(.defaultAction)
             .disabled(!viewModel.canUsePrimaryAction)
             .controlSize(.large)
             .accessibilityLabel(viewModel.state.isRecording ? "Stop recording" : "Start recording")
@@ -368,6 +467,8 @@ struct RecordingShellView: View {
 
 struct CompletedSessionSummary: View {
     let session: CompletedRecordingSession
+    let markdownExportFeedbackText: String?
+    let onRetryMarkdownExport: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -415,13 +516,48 @@ struct CompletedSessionSummary: View {
                 }
             }
 
-            Text("Saved locally in this app for now. Markdown export and search index are coming in a later slice.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+            MarkdownExportSummary(
+                session: session,
+                feedbackText: markdownExportFeedbackText,
+                onRetryMarkdownExport: onRetryMarkdownExport
+            )
         }
         .padding(16)
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+struct MarkdownExportSummary: View {
+    let session: CompletedRecordingSession
+    let feedbackText: String?
+    let onRetryMarkdownExport: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let markdownFileURL = session.markdownFileURL {
+                Text(feedbackText ?? "Markdown saved locally.")
+                    .font(.callout.weight(.semibold))
+                Text("This file was generated from the transcript preview currently shown here.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Text("Saved to: \(markdownFileURL.path)")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            } else {
+                Text(feedbackText ?? "Markdown was not saved")
+                    .font(.callout.weight(.semibold))
+                Text("Your transcript preview is still available in this window. Try saving again.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Button("Save Markdown") {
+                    onRetryMarkdownExport()
+                }
+            }
+        }
+        .padding(.top, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -443,6 +579,8 @@ struct CompletedSessionMetric: View {
 
 struct RecentRecordingsSidebar: View {
     let sessions: [CompletedRecordingSession]
+    let onRevealMarkdown: (CompletedRecordingSession) -> Void
+    let onCopyMarkdownPath: (CompletedRecordingSession) -> Void
     @State private var isSessionGroupExpanded = true
 
     var body: some View {
@@ -461,7 +599,11 @@ struct RecentRecordingsSidebar: View {
                 DisclosureGroup(isExpanded: $isSessionGroupExpanded) {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(sessions) { session in
-                            RecentRecordingTreeRow(session: session)
+                            RecentRecordingTreeRow(
+                                session: session,
+                                onRevealMarkdown: onRevealMarkdown,
+                                onCopyMarkdownPath: onCopyMarkdownPath
+                            )
                         }
                     }
                     .padding(.top, 6)
@@ -487,6 +629,8 @@ struct RecentRecordingsSidebar: View {
 
 struct RecentRecordingTreeRow: View {
     let session: CompletedRecordingSession
+    let onRevealMarkdown: (CompletedRecordingSession) -> Void
+    let onCopyMarkdownPath: (CompletedRecordingSession) -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -511,6 +655,17 @@ struct RecentRecordingTreeRow: View {
         .padding(.leading, 8)
         .padding(.trailing, 6)
         .contentShape(Rectangle())
+        .contextMenu {
+            Button("Show in Finder") {
+                onRevealMarkdown(session)
+            }
+            .disabled(session.markdownFileURL == nil)
+
+            Button("Copy path") {
+                onCopyMarkdownPath(session)
+            }
+            .disabled(session.markdownFileURL == nil)
+        }
         .accessibilityElement(children: .combine)
     }
 }

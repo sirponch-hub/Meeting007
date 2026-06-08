@@ -40,9 +40,19 @@ The default must be chosen by product decision before raw audio persistence ship
 
 Prototype completed-session history may keep transcript preview text in memory during the current app process. This is acceptable only when:
 
-- No transcript preview text is written to files, SQLite, logs, REST, MCP, telemetry, or cloud services.
+- No transcript preview text is written to SQLite, logs, REST, MCP, telemetry, or cloud services.
 - The UI clearly avoids implying durable history before Markdown/SQLite persistence ships.
 - A fresh app process starts with an empty runtime history unless durable storage has been explicitly implemented and reviewed.
+
+## Markdown Transcript Files
+
+Markdown transcript export is a local-only user-owned artifact.
+
+- Default folder: `~/Documents/Meeting007/Transcripts/`.
+- Export writes UTF-8 Markdown files only.
+- Export must not create raw audio, SQLite, REST/MCP, telemetry, cloud, or hosted-account side effects.
+- Partial preview lines are excluded from the final Markdown file unless a future product decision changes export semantics.
+- The UI must show the saved local path and make clear the file was generated from the current local transcript preview.
 
 ## Local API And MCP
 
