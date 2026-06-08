@@ -6,19 +6,22 @@ public struct MeetingMetadata: Equatable, Sendable {
     public let startedAt: Date
     public let endedAt: Date?
     public let primaryLanguage: String
+    public let transcriptSource: String
 
     public init(
         id: UUID = UUID(),
         title: String,
         startedAt: Date,
         endedAt: Date? = nil,
-        primaryLanguage: String = "ru"
+        primaryLanguage: String = "ru",
+        transcriptSource: String = "local_preview"
     ) {
         self.id = id
         self.title = title
         self.startedAt = startedAt
         self.endedAt = endedAt
         self.primaryLanguage = primaryLanguage
+        self.transcriptSource = transcriptSource
     }
 }
 
@@ -29,7 +32,8 @@ public enum MarkdownTranscriptExporter {
             "id: \(metadata.id.uuidString)",
             "title: \(yamlEscape(metadata.title))",
             "started_at: \(metadata.startedAt.ISO8601Format())",
-            "primary_language: \(metadata.primaryLanguage)"
+            "primary_language: \(metadata.primaryLanguage)",
+            "transcript_source: \(metadata.transcriptSource)"
         ]
 
         if let endedAt = metadata.endedAt {
@@ -55,4 +59,3 @@ public enum MarkdownTranscriptExporter {
         "\"\(value.replacingOccurrences(of: "\"", with: "\\\""))\""
     }
 }
-

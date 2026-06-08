@@ -13,6 +13,9 @@ struct Meeting007CoreChecks {
         checkCopyLastWindowContextCanReturnEmptyText()
         checkTimestampFormatterUsesMinutesAndHours()
         checkMarkdownExportIncludesOnlyFinalSegments()
+        checkMarkdownFilenameSlugUsesSafeReadableText()
+        await checkLocalMarkdownWriterCreatesFolderAndFile()
+        await checkLocalMarkdownWriterUsesDistinctFilenamesForDuplicateTitles()
         await checkManualRecordingStartCreatesSession()
         await checkManualRecordingStopCompletesSession()
         await checkRepeatedStartDoesNotCreateDuplicateSession()
@@ -235,8 +238,85 @@ struct Meeting007CoreChecks {
 
         require(markdown.contains("# Русская встреча"), "Markdown must include the meeting title.")
         require(markdown.contains("primary_language: ru"), "Markdown must include the Russian default language.")
+        require(markdown.contains("transcript_source: local_preview"), "Markdown must identify the transcript source.")
         require(markdown.contains("Me: Готово"), "Markdown must include final transcript text.")
         require(!markdown.contains("partial"), "Markdown export must exclude partial segments.")
+    }
+
+    private static func checkMarkdownFilenameSlugUsesSafeReadableText() {
+        let meetingID = UUID(uuidString: "12345678-1234-1234-1234-123456789abc")!
+        let metadata = MeetingMetadata(
+            id: meetingID,
+            title: "Русская встреча / QA",
+            startedAt: Date(timeIntervalSince1970: 0)
+        )
+        let store = MarkdownTranscriptFileStore(folderURL: FileManager.default.temporaryDirectory)
+
+        let filename = store.filename(for: metadata)
+
+        require(filename == "1970-01-01_00-00_russkaya-vstrecha-qa_12345678.md", "Filename must include date, safe title slug, short UUID, and .md extension.")
+        require(MarkdownTranscriptFileStore.slug("   ") == "untitled-meeting", "Whitespace title slug must fall back to untitled-meeting.")
+    }
+
+    private static func checkLocalMarkdownWriterCreatesFolderAndFile() async {
+        let exportFolder = temporaryExportFolder()
+        let completedSession = makeCompletedSession(
+            id: UUID(uuidString: "aaaaaaaa-1111-2222-3333-444444444444")!,
+            title: "Русская встреча",
+            startedAt: Date(timeIntervalSince1970: 0),
+            endedAt: Date(timeIntervalSince1970: 90)
+        )
+        let writer = LocalMarkdownTranscriptFileWriter(folderURL: exportFolder)
+
+        do {
+            let result = try await writer.write(completedSession)
+            let markdown = try String(contentsOf: result.fileURL, encoding: .utf8)
+            let folderContents = try FileManager.default.contentsOfDirectory(at: exportFolder, includingPropertiesForKeys: nil)
+
+            require(FileManager.default.fileExists(atPath: exportFolder.path), "Markdown writer must create the export folder.")
+            require(result.fileURL.path.hasPrefix(exportFolder.path), "Markdown writer must honor the injected export folder.")
+            require(result.fileURL.pathExtension == "md", "Markdown writer must create a .md file.")
+            require(markdown == result.markdown, "Returned markdown must match file contents.")
+            require(markdown.contains("# Русская встреча"), "Markdown file must include the meeting title.")
+            require(markdown.contains("started_at: 1970-01-01T00:00:00Z"), "Markdown file must include started_at.")
+            require(markdown.contains("ended_at: 1970-01-01T00:01:30Z"), "Markdown file must include ended_at.")
+            require(markdown.contains("primary_language: ru"), "Markdown file must include Russian language metadata.")
+            require(markdown.contains("transcript_source: local_preview"), "Markdown file must include transcript source metadata.")
+            require(markdown.contains("Others: Русский сегмент"), "Markdown file must include final transcript segments.")
+            require(!markdown.contains("Черновик"), "Markdown file must exclude partial transcript segments.")
+            require(!folderContents.contains { $0.lastPathComponent.hasSuffix(".tmp") }, "Markdown writer must not leave temp files after success.")
+        } catch {
+            require(false, "Markdown writer must save completed sessions without throwing: \(error)")
+        }
+    }
+
+    private static func checkLocalMarkdownWriterUsesDistinctFilenamesForDuplicateTitles() async {
+        let exportFolder = temporaryExportFolder()
+        let startedAt = Date(timeIntervalSince1970: 0)
+        let first = makeCompletedSession(
+            id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+            title: "Same Title",
+            startedAt: startedAt,
+            endedAt: Date(timeIntervalSince1970: 60)
+        )
+        let second = makeCompletedSession(
+            id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
+            title: "Same Title",
+            startedAt: startedAt,
+            endedAt: Date(timeIntervalSince1970: 120)
+        )
+        let writer = LocalMarkdownTranscriptFileWriter(folderURL: exportFolder)
+
+        do {
+            let firstResult = try await writer.write(first)
+            let secondResult = try await writer.write(second)
+
+            require(firstResult.fileURL != secondResult.fileURL, "Duplicate title/start-time sessions must use distinct filenames.")
+            require(FileManager.default.fileExists(atPath: firstResult.fileURL.path), "First Markdown file must remain after duplicate-title export.")
+            require(FileManager.default.fileExists(atPath: secondResult.fileURL.path), "Second Markdown file must be saved after duplicate-title export.")
+        } catch {
+            require(false, "Markdown writer must handle duplicate titles without throwing: \(error)")
+        }
     }
 
     private static func checkManualRecordingStartCreatesSession() async {
@@ -532,8 +612,13 @@ struct Meeting007CoreChecks {
         require(emptyFreshStore.isEmpty, "A fresh in-memory store must not contain prior sessions.")
     }
 
-    private static func makeCompletedSession(title: String, startedAt: Date, endedAt: Date) -> CompletedRecordingSession {
-        var session = RecordingSession(id: UUID(), title: title)
+    private static func makeCompletedSession(
+        id: UUID = UUID(),
+        title: String,
+        startedAt: Date,
+        endedAt: Date
+    ) -> CompletedRecordingSession {
+        var session = RecordingSession(id: id, title: title)
         session.markStarted(at: startedAt)
         session.markEnded(at: endedAt)
         let transcript = MeetingTranscript(meetingID: session.id, segments: [
@@ -564,6 +649,13 @@ struct Meeting007CoreChecks {
         }
 
         return completedSession
+    }
+
+    private static func temporaryExportFolder() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("Meeting007CoreChecks", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("Transcripts", isDirectory: true)
     }
 
     private static func require(_ condition: @autoclosure () -> Bool, _ message: String) {

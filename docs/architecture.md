@@ -54,11 +54,23 @@ Meeting data has two local forms:
 - Markdown files are the durable user-owned transcript format.
 - SQLite is the indexed operational store for search, segment retrieval, API responses, and live state.
 
-Meeting IDs are UUIDs. Filenames should use date plus readable meeting title slug, for example:
+Current implemented storage boundary:
+
+- `TranscriptFileWriting` is the protocol for durable transcript file persistence.
+- `LocalMarkdownTranscriptFileWriter` is the default writer used by the app after Stop.
+- `MarkdownTranscriptFileStore` owns folder creation, filename generation, Markdown file writing, and temp-file cleanup.
+- Default Markdown folder: `~/Documents/Meeting007/Transcripts/`.
+- Markdown export uses a same-folder temp file and then moves/replaces the final Markdown file.
+- Markdown files are durable user-owned artifacts; the in-memory recent-recording store remains runtime-only.
+- SQLite remains a later storage-index slice and must not be introduced implicitly by Markdown export work.
+
+Meeting IDs are UUIDs. Current Markdown filenames use UTC start time, transliterated title slug, and short UUID:
 
 ```text
-2026-06-07_product-sync.md
+2026-06-08_14-30_russkaya-vstrecha_a1b2c3d4.md
 ```
+
+The Markdown file preserves the original meeting title, including Cyrillic text, in front matter and the H1.
 
 ## Local REST API
 

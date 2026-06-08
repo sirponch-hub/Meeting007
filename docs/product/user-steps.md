@@ -130,18 +130,23 @@ Completed-session implementation slice:
 
 - User goal: keep the meeting transcript as a file the user owns.
 - User action: waits for finalization to finish.
-- App response: writes a Markdown transcript and updates the local SQLite index.
-- Success result: transcript is available in the app, as a local file, and through local access services.
+- App response: writes a Markdown transcript to the local transcript folder. SQLite indexing comes later.
+- Success result: transcript is available as a local Markdown file the user can inspect outside the app.
 - Acceptance criteria:
   - Markdown file is created with readable filename based on date and title.
   - Transcript includes timestamps, speaker labels, title, start time, and language.
-  - SQLite index contains matching meeting and segment data.
+  - SQLite index contains matching meeting and segment data when the storage-index slice ships.
   - No cloud upload is required.
 
-Current status:
+Markdown export implementation slice:
 
-- Durable Markdown/SQLite saving is still a future slice.
-- The current app can show completed recordings only for the active app process.
+- After Stop, the app writes a Markdown file under `~/Documents/Meeting007/Transcripts/`.
+- Filename format is `yyyy-MM-dd_HH-mm_<title-slug>_<short-id>.md`.
+- Russian titles are transliterated for filesystem-safe filenames; the Markdown title preserves the original text.
+- Markdown front matter includes `id`, `title`, `started_at`, `ended_at`, `primary_language`, and `transcript_source: local_preview`.
+- Markdown body exports final transcript segments only; partial preview lines are excluded from the final file.
+- The completed-session UI shows `Markdown saved locally`, the saved path, `Show in Finder`, and `Copy path`.
+- This slice does not add SQLite, REST/MCP, audio persistence, cloud sync, telemetry, or real STT.
 
 ## Step 10: Find Past Meetings
 

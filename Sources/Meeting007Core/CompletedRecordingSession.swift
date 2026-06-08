@@ -7,13 +7,15 @@ public struct CompletedRecordingSession: Equatable, Identifiable, Sendable {
     public let note: String
     public let completedAt: Date
     public let isPrototypeOnly: Bool
+    public let markdownFileURL: URL?
 
     public init?(
         session: RecordingSession,
         transcript: MeetingTranscript,
         note: String = "",
         completedAt: Date = Date(),
-        isPrototypeOnly: Bool = true
+        isPrototypeOnly: Bool = true,
+        markdownFileURL: URL? = nil
     ) {
         guard session.startedAt != nil, session.endedAt != nil, transcript.meetingID == session.id else {
             return nil
@@ -25,6 +27,7 @@ public struct CompletedRecordingSession: Equatable, Identifiable, Sendable {
         self.note = note.trimmingCharacters(in: .whitespacesAndNewlines)
         self.completedAt = completedAt
         self.isPrototypeOnly = isPrototypeOnly
+        self.markdownFileURL = markdownFileURL
     }
 
     public var title: String {
