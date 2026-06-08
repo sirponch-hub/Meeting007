@@ -69,6 +69,19 @@ public struct CompletedRecordingSession: Equatable, Identifiable, Sendable {
     public var stablePreviewText: String? {
         transcript.finalizedSegments().last?.text
     }
+
+    public func renamed(to title: String, markdownFileURL: URL? = nil) -> CompletedRecordingSession? {
+        var renamedSession = session
+        renamedSession.rename(to: title)
+        return CompletedRecordingSession(
+            session: renamedSession,
+            transcript: transcript,
+            note: note,
+            completedAt: completedAt,
+            isPrototypeOnly: isPrototypeOnly,
+            markdownFileURL: markdownFileURL
+        )
+    }
 }
 
 public protocol RecordingSessionStore: Sendable {

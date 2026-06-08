@@ -25,6 +25,7 @@ final class RecordingShellViewModel: ObservableObject {
     @Published private(set) var recentSessions: [CompletedRecordingSession] = []
     @Published private(set) var copyFeedbackText: String?
     @Published private(set) var markdownExportFeedbackText: String?
+    @Published var completedTitleDraft = ""
 
     private let controller: RecordingSessionController
     private let transcriptPreviewController: LiveTranscriptPreviewController
@@ -105,6 +106,7 @@ final class RecordingShellViewModel: ObservableObject {
         copyFeedbackText = nil
         markdownExportFeedbackText = nil
         pendingMarkdownExportSession = nil
+        completedTitleDraft = ""
         state = .starting
         elapsedText = "00:00"
 
@@ -166,6 +168,23 @@ final class RecordingShellViewModel: ObservableObject {
 
         Task {
             let exportedSession = await exportMarkdownIfPossible(for: pendingMarkdownExportSession)
+            await recordingStore.save(exportedSession)
+            recentSessions = await recordingStore.recentSessions(limit: 8)
+        }
+    }
+
+    func saveCompletedTitle() {
+        guard let lastCompletedSession,
+              let renamedSession = lastCompletedSession.renamed(
+                to: completedTitleDraft,
+                markdownFileURL: lastCompletedSession.markdownFileURL
+              ) else {
+            return
+        }
+
+        markdownExportFeedbackText = "Saving title and updating Markdown..."
+        Task {
+            let exportedSession = await exportMarkdownIfPossible(for: renamedSession)
             await recordingStore.save(exportedSession)
             recentSessions = await recordingStore.recentSessions(limit: 8)
         }
@@ -273,13 +292,14 @@ final class RecordingShellViewModel: ObservableObject {
         let exportedSession = await exportMarkdownIfPossible(for: completedSession)
         await recordingStore.save(exportedSession)
         recentSessions = await recordingStore.recentSessions(limit: 8)
+        completedTitleDraft = exportedSession.title
     }
 
     private func exportMarkdownIfPossible(for completedSession: CompletedRecordingSession) async -> CompletedRecordingSession {
         do {
             let result = try await transcriptFileWriter.write(completedSession)
             pendingMarkdownExportSession = nil
-            markdownExportFeedbackText = "Markdown saved locally."
+            markdownExportFeedbackText = completedSession.markdownFileURL == nil ? "Markdown saved locally." : "Title saved and Markdown updated locally."
             return CompletedRecordingSession(
                 session: completedSession.session,
                 transcript: completedSession.transcript,
@@ -349,7 +369,9 @@ struct RecordingShellView: View {
                     if let lastCompletedSession = viewModel.lastCompletedSession {
                         CompletedSessionSummary(
                             session: lastCompletedSession,
+                            titleDraft: $viewModel.completedTitleDraft,
                             markdownExportFeedbackText: viewModel.markdownExportFeedbackText,
+                            onSaveTitle: viewModel.saveCompletedTitle,
                             onRevealMarkdown: viewModel.revealMarkdownFile,
                             onCopyMarkdownPath: viewModel.copyMarkdownPath,
                             onRetryMarkdownExport: viewModel.retryMarkdownExport
@@ -436,7 +458,9 @@ struct RecordingShellView: View {
 
 struct CompletedSessionSummary: View {
     let session: CompletedRecordingSession
+    @Binding var titleDraft: String
     let markdownExportFeedbackText: String?
+    let onSaveTitle: () -> Void
     let onRevealMarkdown: (CompletedRecordingSession) -> Void
     let onCopyMarkdownPath: (CompletedRecordingSession) -> Void
     let onRetryMarkdownExport: () -> Void
@@ -465,6 +489,24 @@ struct CompletedSessionSummary: View {
                 CompletedSessionMetric(label: "Ended", value: session.endedAt?.formatted(date: .omitted, time: .shortened) ?? "Unknown")
                 CompletedSessionMetric(label: "Language", value: session.primaryLanguage.uppercased())
                 CompletedSessionMetric(label: "Transcript preview", value: "\(session.finalSegmentCount) final, \(session.partialSegmentCount) live")
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Meeting title")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    TextField("Meeting title", text: $titleDraft)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Completed meeting title")
+                    Button("Save title") {
+                        onSaveTitle()
+                    }
+                    .disabled(titleDraft.trimmingCharacters(in: .whitespacesAndNewlines) == session.title)
+                }
+                Text("Use this if you started recording first and named the meeting afterwards.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             if let stablePreviewText = session.stablePreviewText {

@@ -29,6 +29,8 @@ struct Meeting007CoreChecks {
         await checkStopSavesCompletedSessionToHistory()
         await checkRepeatedStopDoesNotDuplicateSavedSession()
         await checkMultipleCompletedSessionsRemainInHistory()
+        checkCompletedSessionRenameKeepsSessionIdentity()
+        await checkRenamedCompletedSessionExportsWithNewTitle()
         await checkStopWhileIdleDoesNotSaveHistoryItem()
         await checkStartAfterStopKeepsPreviousHistory()
         await checkHistoryUsesInMemoryStoreOnly()
@@ -548,6 +550,51 @@ struct Meeting007CoreChecks {
 
         let limited = await store.recentSessions(limit: 1)
         require(limited.map(\.title) == ["Newer"], "Completed session history must respect the requested limit.")
+    }
+
+    private static func checkCompletedSessionRenameKeepsSessionIdentity() {
+        let completedSession = makeCompletedSession(
+            id: UUID(uuidString: "33333333-3333-3333-3333-333333333333")!,
+            title: "",
+            startedAt: Date(timeIntervalSince1970: 10),
+            endedAt: Date(timeIntervalSince1970: 20)
+        )
+
+        guard let renamed = completedSession.renamed(to: "Новая встреча") else {
+            require(false, "Completed session rename must create a valid snapshot.")
+            return
+        }
+
+        require(renamed.id == completedSession.id, "Renaming a completed session must keep the meeting ID.")
+        require(renamed.startedAt == completedSession.startedAt, "Renaming a completed session must keep startedAt.")
+        require(renamed.endedAt == completedSession.endedAt, "Renaming a completed session must keep endedAt.")
+        require(renamed.title == "Новая встреча", "Renaming a completed session must update the title.")
+        require(renamed.transcript == completedSession.transcript, "Renaming a completed session must not change transcript text.")
+    }
+
+    private static func checkRenamedCompletedSessionExportsWithNewTitle() async {
+        let exportFolder = temporaryExportFolder()
+        let completedSession = makeCompletedSession(
+            id: UUID(uuidString: "44444444-4444-4444-4444-444444444444")!,
+            title: "",
+            startedAt: Date(timeIntervalSince1970: 0),
+            endedAt: Date(timeIntervalSince1970: 60)
+        )
+        guard let renamed = completedSession.renamed(to: "Новая встреча") else {
+            require(false, "Completed session rename must create a valid snapshot for export.")
+            return
+        }
+        let writer = LocalMarkdownTranscriptFileWriter(folderURL: exportFolder)
+
+        do {
+            let result = try await writer.write(renamed)
+            let markdown = try String(contentsOf: result.fileURL, encoding: .utf8)
+
+            require(result.fileURL.lastPathComponent.contains("novaya-vstrecha"), "Renamed completed session must export with the new title slug.")
+            require(markdown.contains("# Новая встреча"), "Renamed completed session Markdown must include the new title.")
+        } catch {
+            require(false, "Renamed completed session must export without throwing: \(error)")
+        }
     }
 
     private static func checkStopWhileIdleDoesNotSaveHistoryItem() async {
