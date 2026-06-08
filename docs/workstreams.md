@@ -46,14 +46,14 @@ Remind the user to consider extra skills or MCP/connectors when these moments ar
 
 ## Premium UI/UX Audit
 
-- Status: Ready for Review
+- Status: Done
 - Owner: Codex + UX Designer agent
 - User outcome: Raise Meeting007's interface bar from functional prototype to premium native macOS product quality.
 - Scope: Audit current UI against `docs/design-quality-gate.md`, identify top UX/UI problems, define target information architecture, propose phased redesign backlog.
 - Out of scope: Implementing UI code changes in this workstream.
 - Docs touched: `docs/design/current-ui-ux-audit.md`, `docs/design-quality-gate.md`, `docs/agents/ux-designer.md`, `docs/process/agent-workflow.md`, `AGENTS.md`.
-- Verification: `swift run Meeting007CoreChecks` passed; `swift build --product Meeting007App` passed for the design-standards branch.
-- Gates: UX audit completed; user review pending; merge pending.
+- Verification: `swift run Meeting007CoreChecks` passed; `swift build --product Meeting007App` passed after merge to `main`.
+- Gates: UX audit completed; user accepted; merge complete.
 - Open decisions: Choose the first redesign implementation slice.
 - Handoff notes: Current UI fails the premium design gate. The recommended first implementation slice is IA Cleanup: compact toolbar/header, dominant recording row, one title field, sidebar selection, and reduced card-like layout.
 
