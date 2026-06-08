@@ -14,6 +14,8 @@ The v1 target user is one individual on an Apple Silicon Mac who spends time in 
 - Display a useful live transcript during the meeting.
 - Copy the latest meeting context quickly while the meeting is still running.
 - Save a final transcript after the meeting.
+- Let the user choose where owned Markdown transcripts are saved.
+- Use Google Calendar meeting context to reduce manual naming and capture participant metadata.
 - Let local tools and AI assistants access meeting transcripts through REST and MCP.
 - Keep transcripts available for free as user-owned local data.
 
@@ -24,8 +26,8 @@ Detailed user-step decomposition lives in [User Steps](user-steps.md). Implement
 ### Start A Meeting
 
 1. User opens Meeting007.
-2. App shows calendar meetings when calendar access has been granted.
-3. User starts recording manually from the main app window.
+2. App can use Google Calendar context when calendar access has been granted.
+3. User starts recording manually from the main app window, with or without calendar context.
 4. App confirms active capture and starts showing transcript output.
 
 ### Use Transcript During A Meeting
@@ -39,8 +41,32 @@ Detailed user-step decomposition lives in [User Steps](user-steps.md). Implement
 
 1. User stops recording.
 2. App finalizes pending transcript segments.
-3. App writes a Markdown transcript and updates the SQLite index.
+3. App writes a Markdown transcript to the user's selected transcript folder and updates the SQLite index.
 4. The meeting becomes available through the app, local REST API, and MCP tools.
+
+### Control Transcript Storage
+
+1. User opens storage settings.
+2. App shows the current Markdown transcript folder.
+3. User can change the folder, reveal it in Finder, copy the path, or reset to the default location.
+4. New Markdown exports use the selected folder.
+5. Existing transcript files are not moved silently.
+
+### Use Google Calendar Context
+
+MVP:
+
+1. User explicitly connects Google Calendar.
+2. App fetches relevant current/upcoming event metadata.
+3. App uses the event topic/title as the meeting title.
+4. App stores event participants as local meeting metadata.
+5. Manual start remains available when calendar access is not connected or no event matches.
+
+Enhancement:
+
+1. Main screen shows today's meetings.
+2. User can start a recording from a listed meeting.
+3. App can notify the user before a meeting starts through macOS Notification Center after notification permission is granted.
 
 ## Functional Requirements
 
@@ -49,6 +75,12 @@ Detailed user-step decomposition lives in [User Steps](user-steps.md). Implement
 - The app must label local microphone speech as `Me` and remote/system audio as `Others` in v1.
 - The app must support Russian as the default transcription language.
 - The app must save final transcripts as Markdown.
+- The app must let the user configure the Markdown transcript storage folder.
+- The app must default Markdown transcript storage to `~/Documents/Meeting007/Transcripts/` until the user chooses another local folder.
+- The app must not silently move existing transcript files when the storage folder changes.
+- Google Calendar integration MVP must pull meeting title/topic and participants after explicit user connection.
+- Google Calendar enhancement must support today's meeting list, start-from-meeting, and pre-meeting Notification Center alerts.
+- Manual start/stop must remain reliable without Google Calendar.
 - The app must maintain a SQLite index for meetings, segments, timestamps, search, and API access.
 - The app must expose localhost-only REST endpoints for meetings and transcripts.
 - The app must expose MCP tools for searching and fetching meetings.
@@ -79,5 +111,7 @@ Detailed user-step decomposition lives in [User Steps](user-steps.md). Implement
 - User can see live transcript text while a meeting is active.
 - User can copy the last 5 minutes and the full transcript during a meeting.
 - Stopping a meeting creates a Markdown transcript and SQLite index entry.
+- User can choose the folder used for new Markdown transcript exports.
+- Google Calendar MVP can populate title and participants for a recording without making calendar access mandatory.
 - REST and MCP can retrieve the same transcript data.
 - No audio or transcript data leaves the Mac in the default v1 path.

@@ -17,8 +17,10 @@ Required coverage:
 - Copy last 5 minutes window selection, formatted clipboard text, metadata header, and live partial markers.
 - Markdown export.
 - Markdown file writer path, filename, folder creation, temp-file cleanup, and local-only scope.
+- Markdown transcript folder setting, default folder behavior, selected-folder persistence, write-access validation, and recoverable unavailable-folder errors.
 - Completed-session runtime history after Stop.
 - In-memory history deduplication and newest-first ordering.
+- Google Calendar event mapping from title/topic, time, and participants into local meeting metadata using mocked provider fixtures.
 - SQLite mapping and migrations.
 - API response shapes.
 
@@ -30,6 +32,8 @@ Use deterministic fixtures:
 - Fake local STT engine returning known partial and final segments.
 - Temporary SQLite database.
 - Temporary Markdown output folder.
+- Fake transcript-folder settings store.
+- Fake Google Calendar provider returning deterministic event metadata.
 - Local API server bound to a random localhost port.
 
 ## Audio Fixture Policy
@@ -45,6 +49,8 @@ Use deterministic fixtures:
 - macOS microphone permission prompt.
 - macOS screen/system audio permission prompt.
 - Calendar permission prompt.
+- Google Calendar connection flow.
+- Notification permission prompt when meeting reminders are implemented.
 - Manual start/stop recording.
 - Stop recording and verify the completed session appears in recent recordings for the current app run.
 - Start/stop a second recording and verify recent recordings stay newest first.
@@ -62,6 +68,9 @@ Use deterministic fixtures:
 - Verify Copy Last 5 Minutes puts timestamped `Me`/`Others` transcript text on the clipboard.
 - Stop meeting and verify Markdown output.
 - Verify Markdown appears under `~/Documents/Meeting007/Transcripts/`.
+- Change Markdown transcript folder and verify new exports use the selected folder.
+- Verify existing Markdown transcripts are not moved silently after changing the folder.
+- Verify unavailable or read-only transcript folder shows a recoverable error and does not discard transcript text.
 - Verify Markdown filename is date/title/UUID based and filesystem-safe.
 - Verify Markdown contains final Russian segments and excludes partial preview lines.
 - Verify a meeting can be named after Stop from the main `Meeting title` field by pressing Enter, and the re-exported Markdown uses the updated title.
@@ -69,6 +78,9 @@ Use deterministic fixtures:
 - Verify no audio, SQLite, REST/MCP, telemetry, or cloud artifacts are created by Markdown export.
 - Verify REST transcript matches Markdown.
 - Verify MCP transcript matches REST.
+- Connect Google Calendar and verify meeting title/topic and participants are imported into local meeting metadata.
+- Verify manual recording still works when Google Calendar is disconnected, denied, expired, or unavailable.
+- When calendar enhancements ship, verify today's meetings appear on the main screen, start-from-meeting uses the selected event, and Notification Center reminders appear only after permission.
 
 ## Performance Targets
 
