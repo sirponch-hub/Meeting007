@@ -30,7 +30,7 @@ User steps:
 - Step 6: Copy Recent Context During Meeting.
 - Step 8: Stop Recording.
 - Step 9: Save Final Transcript.
-- Step 14: Verify A Meeting End To End, excluding REST/MCP until P1.
+- Step 15: Verify A Meeting End To End, excluding REST/MCP until P1.
 
 Why first:
 
@@ -58,9 +58,10 @@ User steps:
 - Step 1: First Launch.
 - Step 2: Grant Recording Permissions.
 - Step 7: Copy Full Transcript During Meeting.
-- Step 10: Find Past Meetings.
-- Step 12: Control Local Data.
-- Step 13: Recover From Problems.
+- Step 10: Choose Transcript Storage Folder.
+- Step 11: Find Past Meetings.
+- Step 13: Control Local Data.
+- Step 14: Recover From Problems.
 
 Convenience improvements:
 
@@ -80,7 +81,7 @@ Definition of done:
 - Missing permissions are visible and recoverable.
 - Full transcript copy works during active recording.
 - Meeting history opens previous local transcripts.
-- User can open transcript storage location.
+- User can open and change the Markdown transcript storage location for future exports.
 - Product-facing errors explain user impact and next action.
 
 ## P1: Local Access Surface
@@ -89,8 +90,8 @@ Goal: make transcripts available to other local apps and AI assistants.
 
 User steps:
 
-- Step 11: Access Transcript From Other Apps.
-- Step 14: Verify A Meeting End To End, including REST/MCP.
+- Step 12: Access Transcript From Other Apps.
+- Step 15: Verify A Meeting End To End, including REST/MCP.
 
 Why P1:
 
@@ -117,15 +118,22 @@ User steps:
 Why P1:
 
 - Calendar improves daily UX and file naming.
+- Google Calendar context reduces mistakes by importing the real meeting topic and participants.
 - Manual start remains the reliable fallback and must ship first.
 
 Definition of done:
 
 - Calendar access is optional.
-- Current/upcoming meetings are visible after permission.
-- User can start recording from a calendar meeting.
-- Meeting title and time populate transcript metadata.
+- Google Calendar MVP pulls meeting topic/title and participants after explicit user connection.
+- Meeting title, participants, and time populate transcript metadata.
 - Manual quick recording still works without calendar access.
+- No recording starts automatically from calendar data in MVP.
+
+Enhancement backlog:
+
+- Today's meetings appear on the main screen.
+- User can start recording from a listed calendar meeting.
+- App can warn before a meeting starts through macOS Notification Center after explicit notification permission.
 
 ## P2: Trust, Recovery, And Data Control
 
@@ -133,9 +141,9 @@ Goal: make the product safe to use in real work situations.
 
 User steps:
 
-- Step 12: Control Local Data.
-- Step 13: Recover From Problems.
-- Step 14: Verify A Meeting End To End with failure cases.
+- Step 13: Control Local Data.
+- Step 14: Recover From Problems.
+- Step 15: Verify A Meeting End To End with failure cases.
 
 Why P2:
 
@@ -146,6 +154,7 @@ Definition of done:
 
 - User can delete a meeting transcript and index entry.
 - Raw audio retention policy is explicit in settings before persistent audio storage ships.
+- User can recover when the selected Markdown folder is missing or not writable.
 - Unsupported hardware, missing local model, denied permission, and capture failure have clear user-facing recovery paths.
 - Failures do not silently discard transcript data.
 
@@ -175,12 +184,13 @@ Why P3:
 3. Local audio capture: microphone and system-audio lanes.
 4. Local Russian STT: model install path, VAD chunking, partial/final segment pipeline.
 5. Finalization: stop flow, Markdown write, SQLite index update.
-6. First-run and permissions UX.
+6. First-run, permissions UX, and configurable Markdown transcript folder.
 7. Meeting history, full transcript copy, hotkey/menu bar convenience controls.
 8. Local REST API.
 9. Local MCP server.
-10. Calendar-assisted meeting start.
-11. Data controls and recovery UX hardening.
+10. Google Calendar MVP: title/topic and participants.
+11. Calendar enhancements: today's meetings, start-from-meeting, Notification Center reminders.
+12. Data controls and recovery UX hardening.
 
 ## Parallel Workstreams
 

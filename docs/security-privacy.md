@@ -12,8 +12,10 @@ The following data is sensitive:
 - Raw system audio.
 - Partial and final transcripts.
 - Meeting titles and calendar metadata.
+- Meeting participants imported from calendar events.
 - Speaker labels.
 - Local API/MCP tokens.
+- Google Calendar OAuth tokens.
 - Debug logs that include transcript or audio-derived text.
 
 ## Permissions
@@ -23,6 +25,7 @@ Request permissions only when needed:
 - Microphone: when recording is first requested.
 - Screen/system audio: when system audio capture is first requested.
 - Calendar: when the user enables calendar-connected meeting start.
+- Notifications: when the user enables meeting-start reminders.
 - Accessibility/global hotkey permissions: when hotkeys are enabled.
 
 Permission screens must explain why the permission is needed and what data remains local.
@@ -49,10 +52,25 @@ Prototype completed-session history may keep transcript preview text in memory d
 Markdown transcript export is a local-only user-owned artifact.
 
 - Default folder: `~/Documents/Meeting007/Transcripts/`.
+- User-selected folders are allowed for new Markdown exports after explicit user choice.
+- Existing Markdown transcripts must not be moved silently when the folder changes.
+- Cloud-synced folders must not become the default; they are acceptable only when the user intentionally selects one.
 - Export writes UTF-8 Markdown files only.
 - Export must not create raw audio, SQLite, REST/MCP, telemetry, cloud, or hosted-account side effects.
 - Partial preview lines are excluded from the final Markdown file unless a future product decision changes export semantics.
 - The UI must show the saved local path and make clear the file was generated from the current local transcript preview.
+
+## Google Calendar
+
+Google Calendar integration is optional and local-first.
+
+- Do not connect Google Calendar unless the user explicitly enables it.
+- Request only the scopes needed to read event title/topic, time, and participants.
+- Store Google OAuth tokens in Keychain.
+- Store imported calendar metadata locally with the meeting record.
+- Manual recording must remain available when Google Calendar is disconnected, denied, expired, or unavailable.
+- Do not upload calendar event data, participant lists, transcripts, or derived summaries to a hosted Meeting007 service in v1.
+- Before exposing participant metadata through REST or MCP, confirm that the local access permission model makes this visible to the user.
 
 ## Local API And MCP
 
@@ -77,6 +95,8 @@ Primary risks:
 - Local endpoint exposed beyond localhost.
 - Sensitive transcript text written to logs.
 - Raw audio retained without user consent.
+- Google Calendar tokens or participant metadata exposed through logs, files, or local APIs without clear consent.
+- User-selected transcript folder unavailable during finalization.
 - Permission prompts that obscure what is being captured.
 
 Mitigations:
@@ -86,3 +106,5 @@ Mitigations:
 - Localhost binding tests.
 - Logging tests where practical.
 - Clear first-run permission UX.
+- Keychain storage for Google Calendar tokens.
+- Recoverable transcript export errors with clear change-folder action.

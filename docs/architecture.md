@@ -13,9 +13,12 @@ flowchart LR
     STT --> Segments["Transcript Segment Store"]
     Segments --> Markdown["Markdown Exporter"]
     Segments --> SQLite["SQLite Index"]
+    Calendar["Google Calendar Connector"] --> SQLite
     SQLite --> REST["Local REST API"]
     SQLite --> MCP["Local MCP Server"]
     SQLite --> UI["SwiftUI App"]
+    Settings["Local Settings + Keychain"] --> Markdown
+    Settings --> Calendar
 ```
 
 ## Native App
@@ -23,7 +26,7 @@ flowchart LR
 - Swift and SwiftUI provide the macOS app shell.
 - ScreenCaptureKit captures system audio.
 - AVAudioEngine/CoreAudio captures microphone audio.
-- EventKit provides calendar access after user consent.
+- A Google Calendar connector provides meeting context after explicit user connection.
 - Later convenience layers may add global hotkeys for quick start/stop and copy actions.
 - Later convenience layers may add menu bar controls for essential recording state and copy actions.
 
@@ -64,6 +67,15 @@ Current implemented storage boundary:
 - Markdown files are durable user-owned artifacts; the in-memory recent-recording store remains runtime-only.
 - SQLite remains a later storage-index slice and must not be introduced implicitly by Markdown export work.
 
+Planned configurable storage boundary:
+
+- The default Markdown folder remains `~/Documents/Meeting007/Transcripts/`.
+- The user can choose a different local folder for future Markdown exports.
+- The selected folder is local app configuration and must not create a cloud dependency.
+- Folder selection must use a native macOS folder picker and validate write access before becoming active.
+- Existing Markdown transcripts are not moved when the setting changes unless a future explicit migration flow is designed.
+- If the selected folder is missing or not writable, export should fail recoverably: keep the transcript visible, explain the impact, and offer retry/change-folder actions.
+
 Meeting IDs are UUIDs. Current Markdown filenames use UTC start time, transliterated title slug, and short UUID:
 
 ```text
@@ -71,6 +83,27 @@ Meeting IDs are UUIDs. Current Markdown filenames use UTC start time, transliter
 ```
 
 The Markdown file preserves the original meeting title, including Cyrillic text, in front matter and the H1.
+
+## Calendar Context
+
+Google Calendar integration is optional and must not replace manual recording.
+
+MVP connector responsibilities:
+
+- Run only after explicit user connection.
+- Request the minimum Google Calendar access needed for event title/topic, time, and participants.
+- Store OAuth refresh/access credentials in Keychain.
+- Fetch current/upcoming event metadata and map it into local meeting metadata.
+- Use event title/topic as the suggested meeting title.
+- Store participant names/emails as local meeting metadata, subject to privacy review before API/MCP exposure.
+
+Enhancement responsibilities:
+
+- Show today's meetings on the main screen.
+- Let the user start recording from a selected meeting.
+- Schedule macOS Notification Center reminders before meeting start after notification permission.
+
+Calendar data must not be sent to any hosted Meeting007 backend in v1.
 
 ## Local REST API
 

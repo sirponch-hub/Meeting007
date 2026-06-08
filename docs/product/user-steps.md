@@ -26,14 +26,24 @@ This document decomposes Meeting007 v1 requirements into user-visible steps. Use
 
 ## Step 3: Connect Calendar
 
-- User goal: start recordings from real meetings without manually naming everything.
-- User action: enables calendar access.
-- App response: asks for calendar permission and shows upcoming/current meetings.
-- Success result: user can choose the current calendar meeting as recording context.
+- User goal: start recordings from real meetings without manually naming everything and keep participant context with the transcript.
+- User action: explicitly connects Google Calendar.
+- App response: requests Google Calendar access and imports relevant current/upcoming event metadata.
+- Success result: user can use the current calendar meeting as recording context.
 - Acceptance criteria:
   - Calendar access is optional.
   - Manual recording remains available without calendar access.
-  - Meeting title and time are used for transcript metadata.
+  - Google Calendar MVP pulls the meeting topic/title.
+  - Google Calendar MVP pulls event participants/attendees and stores them as local meeting metadata.
+  - Meeting title, participants, and time are used for transcript metadata.
+  - The app does not auto-start recording from calendar data in MVP.
+
+Calendar enhancement slice:
+
+- The main screen shows today's meetings after Google Calendar is connected.
+- User can start recording from a listed meeting.
+- Meeting-start reminders can appear through macOS Notification Center after explicit notification permission.
+- Notification timing and quiet-hours behavior should be decided before implementation.
 
 ## Step 4: Start Recording Manually
 
@@ -130,11 +140,13 @@ Completed-session implementation slice:
 
 - User goal: keep the meeting transcript as a file the user owns.
 - User action: waits for finalization to finish.
-- App response: writes a Markdown transcript to the local transcript folder. SQLite indexing comes later.
+- App response: writes a Markdown transcript to the selected local transcript folder. SQLite indexing comes later.
 - Success result: transcript is available as a local Markdown file the user can inspect outside the app.
 - Acceptance criteria:
   - Markdown file is created with readable filename based on date and title.
   - Transcript includes timestamps, speaker labels, title, start time, and language.
+  - New Markdown exports use the user's selected transcript folder.
+  - The default folder remains `~/Documents/Meeting007/Transcripts/` before the user changes it.
   - SQLite index contains matching meeting and segment data when the storage-index slice ships.
   - No cloud upload is required.
 
@@ -150,7 +162,22 @@ Markdown export implementation slice:
 - If the user started recording before naming the meeting, editing the main `Meeting title` field after Stop and pressing Enter saves the new title and writes a new Markdown export with the updated title.
 - This slice does not add SQLite, REST/MCP, audio persistence, cloud sync, telemetry, or real STT.
 
-## Step 10: Find Past Meetings
+## Step 10: Choose Transcript Storage Folder
+
+- User goal: keep Markdown transcripts in the personal folder or knowledge base where they belong.
+- User action: opens storage settings and changes the Markdown transcript folder.
+- App response: shows the current folder, validates write access, and uses the selected folder for future exports.
+- Success result: future meeting transcripts are saved where the user expects.
+- Acceptance criteria:
+  - User can see the current Markdown folder.
+  - User can change the folder through a native macOS folder picker.
+  - User can reveal the folder in Finder, copy the path, and reset to the default folder.
+  - The app validates that it can write to the selected folder before accepting it.
+  - Existing Markdown files are not moved silently.
+  - If the selected folder becomes unavailable, the app keeps the transcript visible and offers a clear retry/change-folder path.
+  - Cloud-synced folders such as iCloud Drive, Dropbox, or Google Drive are allowed only when the user explicitly chooses them.
+
+## Step 11: Find Past Meetings
 
 - User goal: return to a previous transcript quickly.
 - User action: opens Meeting007 and searches or selects a meeting from history.
@@ -161,7 +188,7 @@ Markdown export implementation slice:
   - Meeting list shows date, title, and recording state.
   - Opening a past meeting does not require internet access.
 
-## Step 11: Access Transcript From Other Apps
+## Step 12: Access Transcript From Other Apps
 
 - User goal: use meeting data from scripts, tools, or AI assistants.
 - User action: enables local REST/MCP access and uses a local client.
@@ -173,7 +200,7 @@ Markdown export implementation slice:
   - Services bind to localhost only.
   - Access requires a local token.
 
-## Step 12: Control Local Data
+## Step 13: Control Local Data
 
 - User goal: know what is stored and remove it when needed.
 - User action: opens storage/privacy settings.
@@ -181,10 +208,11 @@ Markdown export implementation slice:
 - Success result: user controls local meeting data.
 - Acceptance criteria:
   - User can open the transcript folder.
+  - User can change the Markdown transcript folder for new exports.
   - User can delete a meeting transcript and index entry.
   - Raw audio retention behavior is explicit before any persistent audio storage ships.
 
-## Step 13: Recover From Problems
+## Step 14: Recover From Problems
 
 - User goal: understand and fix common blockers without technical diagnosis.
 - User action: sees an error or missing capability.
@@ -194,9 +222,11 @@ Markdown export implementation slice:
   - Permission errors explain which user capability is blocked.
   - Unsupported Mac error explains that v1 requires Apple Silicon.
   - Missing local model error offers a clear local installation path.
+  - Unavailable transcript folder error explains where new Markdown files cannot be saved and how to choose another folder.
+  - Calendar connection errors keep manual recording available.
   - Failures do not silently discard transcript data.
 
-## Step 14: Verify A Meeting End To End
+## Step 15: Verify A Meeting End To End
 
 - User goal: trust that Meeting007 worked.
 - User action: records a short test meeting, copies recent context, stops recording, and opens the saved transcript.
@@ -206,5 +236,7 @@ Markdown export implementation slice:
   - Live transcript appears within the target latency.
   - Copy Last 5 Minutes works.
   - Final Markdown matches the app transcript.
+  - Final Markdown is saved to the selected transcript folder.
+  - Calendar-connected meetings carry title and participant metadata when the user connected Google Calendar.
   - REST/MCP transcript matches the saved transcript.
   - No data leaves the Mac.
