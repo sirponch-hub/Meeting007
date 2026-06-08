@@ -44,16 +44,29 @@ Remind the user to consider extra skills or MCP/connectors when these moments ar
 
 ## Current Workstreams
 
-## Premium UI IA Cleanup
+## Configurable Markdown Transcript Folder
 
 - Status: Ready for Review
+- Owner: Codex + BA/UX/Architecture/QA agents
+- User outcome: User can save new owned Markdown transcripts into the folder where they actually work, such as a local knowledge base or explicitly chosen sync folder.
+- Scope: Local folder preference, default folder preservation, native folder picker, write-access validation, reveal/copy/reset actions, new Markdown exports use selected folder, no silent migration of existing files.
+- Out of scope: Dedicated Settings window, migrating existing Markdown files, sandbox security-scoped bookmarks, SQLite folder metadata, REST/MCP folder controls, cloud defaults.
+- Docs touched: `docs/product/user-steps.md`, `docs/architecture.md`, `docs/security-privacy.md`, `docs/testing.md`, `docs/workstreams.md`.
+- Verification: `swift run Meeting007CoreChecks` passed; `swift build --product Meeting007App` passed.
+- Gates: BA scope documented; UX implementation complete; architecture boundary documented; automated checks passed; user acceptance pending; merge pending.
+- Open decisions: Whether a future migration flow should offer to move old Markdown transcripts after explicit confirmation; whether production sandboxing requires security-scoped bookmarks.
+- Handoff notes: The selected path is stored in app preferences through `MarkdownTranscriptFolderSettings`. Changing the folder affects future exports only.
+
+## Premium UI IA Cleanup
+
+- Status: Done
 - Owner: Codex + UX Designer agent
 - User outcome: Make the main window feel like a calm native macOS work surface where recording state, meeting title, transcript, and recent recordings have clear hierarchy.
 - Scope: Compact top recording strip, single editable meeting title in the header, icon-only start/stop control with tooltip and accessibility label, disclosed quick note, active recording row pinned in the left tree, reduced card-like main layout.
 - Out of scope: Full visual redesign, durable sidebar selection/navigation, Copy Full Transcript, configurable transcript folder UI, real audio/STT, menu bar controls, hotkeys.
 - Docs touched: `docs/workstreams.md`.
-- Verification: `swift run Meeting007CoreChecks` passed; `swift build --product Meeting007App` passed.
-- Gates: UX implementation complete; automated checks passed; user acceptance pending; merge pending.
+- Verification: `swift run Meeting007CoreChecks` passed; `swift build --product Meeting007App` passed after merge to `main`.
+- Gates: UX implementation complete; automated checks passed; user accepted; merge complete.
 - Open decisions: Whether the active recording row should become selectable before durable history exists; exact icon style for future Liquid Glass toolbar once the app targets the latest macOS SDK.
 - Handoff notes: Start/Stop is intentionally icon-only in the visible UI, with `record.circle` for start and `stop.circle.fill` for stop. Accessible labels and hover help preserve discoverability without adding visible text buttons.
 

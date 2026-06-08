@@ -32,12 +32,15 @@ final class RecordingShellViewModel: ObservableObject {
     @Published private(set) var recentSessions: [CompletedRecordingSession] = []
     @Published private(set) var copyFeedbackText: String?
     @Published private(set) var markdownExportFeedbackText: String?
+    @Published private(set) var transcriptFolderURL: URL
+    @Published private(set) var transcriptStorageFeedbackText: String?
 
     private let controller: RecordingSessionController
     private let transcriptPreviewController: LiveTranscriptPreviewController
     private let recordingStore: any RecordingSessionStore
     private let clipboardWriter: any ClipboardWriting
-    private let transcriptFileWriter: any TranscriptFileWriting
+    private let transcriptFolderSettings: MarkdownTranscriptFolderSettings
+    private var transcriptFileWriter: any TranscriptFileWriting
     private let copyRecentWindowSeconds: TimeInterval = 300
     private var pendingMarkdownExportSession: CompletedRecordingSession?
     private var timer: Timer?
@@ -48,13 +51,17 @@ final class RecordingShellViewModel: ObservableObject {
         transcriptPreviewController: LiveTranscriptPreviewController = LiveTranscriptPreviewController(),
         recordingStore: any RecordingSessionStore = InMemoryRecordingSessionStore(),
         clipboardWriter: any ClipboardWriting = PasteboardClipboardWriter(),
-        transcriptFileWriter: any TranscriptFileWriting = LocalMarkdownTranscriptFileWriter()
+        transcriptFolderSettings: MarkdownTranscriptFolderSettings = MarkdownTranscriptFolderSettings(),
+        transcriptFileWriter: (any TranscriptFileWriting)? = nil
     ) {
         self.controller = controller
         self.transcriptPreviewController = transcriptPreviewController
         self.recordingStore = recordingStore
         self.clipboardWriter = clipboardWriter
-        self.transcriptFileWriter = transcriptFileWriter
+        self.transcriptFolderSettings = transcriptFolderSettings
+        let folderURL = transcriptFolderSettings.folderURL
+        self.transcriptFolderURL = folderURL
+        self.transcriptFileWriter = transcriptFileWriter ?? LocalMarkdownTranscriptFileWriter(folderURL: folderURL)
     }
 
     var statusText: String {
@@ -160,6 +167,45 @@ final class RecordingShellViewModel: ObservableObject {
         } else {
             markdownExportFeedbackText = "Could not copy Markdown path. Try again."
         }
+    }
+
+    func chooseTranscriptFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.directoryURL = transcriptFolderURL
+        panel.prompt = "Use Folder"
+        panel.message = "Choose where Meeting007 saves new Markdown transcripts. Existing files will stay where they are."
+
+        guard panel.runModal() == .OK, let selectedFolderURL = panel.url else {
+            return
+        }
+
+        applyTranscriptFolder(selectedFolderURL)
+    }
+
+    func revealTranscriptFolder() {
+        do {
+            try MarkdownTranscriptFolderSettings.validateWritableFolder(transcriptFolderURL)
+            NSWorkspace.shared.activateFileViewerSelecting([transcriptFolderURL])
+        } catch {
+            transcriptStorageFeedbackText = "This folder is not available. Choose another folder."
+        }
+    }
+
+    func copyTranscriptFolderPath() {
+        if clipboardWriter.write(transcriptFolderURL.path) {
+            transcriptStorageFeedbackText = "Transcript folder path copied."
+        } else {
+            transcriptStorageFeedbackText = "Could not copy transcript folder path. Try again."
+        }
+    }
+
+    func resetTranscriptFolderToDefault() {
+        transcriptFolderSettings.resetToDefault()
+        refreshTranscriptFolderWriter(feedback: "New Markdown transcripts will use the default folder.")
     }
 
     func retryMarkdownExport() {
@@ -313,9 +359,24 @@ final class RecordingShellViewModel: ObservableObject {
             ) ?? completedSession
         } catch {
             pendingMarkdownExportSession = completedSession
-            markdownExportFeedbackText = "Markdown was not saved. Your transcript preview is still available in this window."
+            markdownExportFeedbackText = "Markdown was not saved to \(transcriptFolderURL.path). Your transcript preview is still available in this window."
             return completedSession
         }
+    }
+
+    private func applyTranscriptFolder(_ folderURL: URL) {
+        do {
+            try transcriptFolderSettings.setFolderURL(folderURL)
+            refreshTranscriptFolderWriter(feedback: "New Markdown transcripts will be saved here.")
+        } catch {
+            transcriptStorageFeedbackText = "This folder is not writable. Choose another folder."
+        }
+    }
+
+    private func refreshTranscriptFolderWriter(feedback: String) {
+        transcriptFolderURL = transcriptFolderSettings.folderURL
+        transcriptFileWriter = LocalMarkdownTranscriptFileWriter(folderURL: transcriptFolderURL)
+        transcriptStorageFeedbackText = feedback
     }
 
     private func updateElapsed() {
@@ -370,6 +431,14 @@ struct RecordingShellView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         quickNoteDisclosure
+                        TranscriptFolderSettingsPanel(
+                            folderURL: viewModel.transcriptFolderURL,
+                            feedbackText: viewModel.transcriptStorageFeedbackText,
+                            onChooseFolder: viewModel.chooseTranscriptFolder,
+                            onRevealFolder: viewModel.revealTranscriptFolder,
+                            onCopyPath: viewModel.copyTranscriptFolderPath,
+                            onResetToDefault: viewModel.resetTranscriptFolderToDefault
+                        )
                         errorMessage
                         if let lastCompletedSession = viewModel.lastCompletedSession {
                             transcriptPanel
@@ -500,6 +569,77 @@ struct RecordingIconButton: View {
         .help(isRecording ? "Stop recording" : "Start recording")
         .accessibilityLabel(isRecording ? "Stop recording" : "Start recording")
         .accessibilityHint(isRecording ? "Stops the current meeting recording." : "Starts a local meeting recording.")
+    }
+}
+
+struct TranscriptFolderSettingsPanel: View {
+    let folderURL: URL
+    let feedbackText: String?
+    let onChooseFolder: () -> Void
+    let onRevealFolder: () -> Void
+    let onCopyPath: () -> Void
+    let onResetToDefault: () -> Void
+
+    var body: some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(folderURL.path)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .textSelection(.enabled)
+                    .accessibilityLabel("Current Markdown transcript folder \(folderURL.path)")
+
+                HStack(spacing: 8) {
+                    Button {
+                        onChooseFolder()
+                    } label: {
+                        Label("Change", systemImage: "folder.badge.gearshape")
+                    }
+                    .help("Choose a different folder for new Markdown transcripts.")
+
+                    Button {
+                        onRevealFolder()
+                    } label: {
+                        Label("Reveal", systemImage: "folder")
+                    }
+                    .help("Show the current transcript folder in Finder.")
+
+                    Button {
+                        onCopyPath()
+                    } label: {
+                        Label("Copy Path", systemImage: "doc.on.doc")
+                    }
+                    .help("Copy the current transcript folder path.")
+
+                    Spacer()
+
+                    Button {
+                        onResetToDefault()
+                    } label: {
+                        Label("Reset", systemImage: "arrow.counterclockwise")
+                    }
+                    .help("Use the default Meeting007 transcript folder for new exports.")
+                }
+
+                if let feedbackText {
+                    Text(feedbackText)
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+
+                Text("Changing this folder affects new Markdown exports only. Existing transcript files stay where they are.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.top, 8)
+        } label: {
+            Label("Transcript folder", systemImage: "folder")
+                .font(.callout.weight(.semibold))
+        }
+        .padding(12)
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
 

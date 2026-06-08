@@ -177,6 +177,17 @@ Markdown export implementation slice:
   - If the selected folder becomes unavailable, the app keeps the transcript visible and offers a clear retry/change-folder path.
   - Cloud-synced folders such as iCloud Drive, Dropbox, or Google Drive are allowed only when the user explicitly chooses them.
 
+First implementation slice:
+
+- The main window includes a compact `Transcript folder` disclosure.
+- The app shows the active Markdown folder path.
+- User can choose a folder through a native macOS folder picker.
+- User can reveal the active folder in Finder, copy the folder path, or reset to the default folder.
+- The selected folder is stored locally in app preferences and used for new Markdown exports.
+- The app validates write access by creating the folder if needed and writing a temporary probe file.
+- Existing Markdown transcript files are not moved when the folder changes.
+- This slice does not add file migration, sandbox security bookmarks, SQLite storage, REST/MCP folder controls, or a dedicated Settings window.
+
 ## Step 11: Find Past Meetings
 
 - User goal: return to a previous transcript quickly.

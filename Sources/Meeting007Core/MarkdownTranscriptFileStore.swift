@@ -20,6 +20,68 @@ public enum TranscriptFileWriteError: Error, Equatable, Sendable {
     case incompleteCompletedSession
 }
 
+public enum MarkdownTranscriptFolderValidationError: Error, Equatable, Sendable {
+    case notWritable(String)
+}
+
+public struct MarkdownTranscriptFolderSettings {
+    public static let defaultStorageKey = "meeting007.markdownTranscriptFolderPath"
+
+    private let defaults: UserDefaults
+    private let storageKey: String
+    private let fileManager: FileManager
+
+    public init(
+        defaults: UserDefaults = .standard,
+        storageKey: String = Self.defaultStorageKey,
+        fileManager: FileManager = .default
+    ) {
+        self.defaults = defaults
+        self.storageKey = storageKey
+        self.fileManager = fileManager
+    }
+
+    public var folderURL: URL {
+        guard let path = defaults.string(forKey: storageKey), !path.isEmpty else {
+            return Self.defaultFolderURL(fileManager: fileManager)
+        }
+
+        return URL(fileURLWithPath: path, isDirectory: true)
+    }
+
+    public var usesDefaultFolder: Bool {
+        defaults.string(forKey: storageKey) == nil
+    }
+
+    public func setFolderURL(_ folderURL: URL) throws {
+        try Self.validateWritableFolder(folderURL, fileManager: fileManager)
+        defaults.set(folderURL.path, forKey: storageKey)
+    }
+
+    public func resetToDefault() {
+        defaults.removeObject(forKey: storageKey)
+    }
+
+    public static func defaultFolderURL(fileManager: FileManager = .default) -> URL {
+        let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first
+            ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Documents", isDirectory: true)
+        return documentsURL
+            .appendingPathComponent("Meeting007", isDirectory: true)
+            .appendingPathComponent("Transcripts", isDirectory: true)
+    }
+
+    public static func validateWritableFolder(_ folderURL: URL, fileManager: FileManager = .default) throws {
+        do {
+            try fileManager.createDirectory(at: folderURL, withIntermediateDirectories: true)
+            let probeURL = folderURL.appendingPathComponent(".meeting007-write-test-\(UUID().uuidString)", isDirectory: false)
+            try "ok".write(to: probeURL, atomically: true, encoding: .utf8)
+            try fileManager.removeItem(at: probeURL)
+        } catch {
+            throw MarkdownTranscriptFolderValidationError.notWritable(folderURL.path)
+        }
+    }
+}
+
 public actor LocalMarkdownTranscriptFileWriter: TranscriptFileWriting {
     private let store: MarkdownTranscriptFileStore
 
@@ -59,12 +121,8 @@ public struct MarkdownTranscriptFileStore {
     }
 
     public static func defaultStore(fileManager: FileManager = .default) -> MarkdownTranscriptFileStore {
-        let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first
-            ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Documents", isDirectory: true)
-        return MarkdownTranscriptFileStore(
-            folderURL: documentsURL
-                .appendingPathComponent("Meeting007", isDirectory: true)
-                .appendingPathComponent("Transcripts", isDirectory: true),
+        MarkdownTranscriptFileStore(
+            folderURL: MarkdownTranscriptFolderSettings.defaultFolderURL(fileManager: fileManager),
             fileManager: fileManager
         )
     }
