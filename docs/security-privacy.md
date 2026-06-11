@@ -43,8 +43,9 @@ Current microphone capture slice:
 
 - Microphone capture starts only after the user presses Start.
 - The app requests macOS microphone access only when recording is requested.
-- Captured audio stays in process memory as runtime chunks for future local STT.
+- Captured audio stays in process memory as normalized 16 kHz mono Float PCM runtime chunks.
 - Runtime chunks are cleared on Stop and are not written to Markdown, SQLite, logs, REST, MCP, telemetry, cloud storage, or raw audio files.
+- VAD emits only in-memory speech windows (`SpeechChunk`) into the local STT boundary and flushes an active speech window on Stop.
 - The visible transcript is now fed through the local STT pipeline boundary. The current deterministic Russian transcriber is runtime-only and does not write raw audio, model files, transcript debug dumps, or network payloads.
 
 Current local STT model policy:

@@ -53,6 +53,7 @@ public struct CapturedAudioChunk: Equatable, Sendable {
     public let sampleRate: Double
     public let channelCount: Int
     public let byteCount: Int
+    public let samples: RuntimeAudioSamples
 
     public init(
         sessionID: UUID,
@@ -61,7 +62,8 @@ public struct CapturedAudioChunk: Equatable, Sendable {
         duration: TimeInterval,
         sampleRate: Double,
         channelCount: Int,
-        byteCount: Int
+        byteCount: Int,
+        samples: RuntimeAudioSamples? = nil
     ) {
         self.sessionID = sessionID
         self.lane = lane
@@ -70,6 +72,7 @@ public struct CapturedAudioChunk: Equatable, Sendable {
         self.sampleRate = sampleRate
         self.channelCount = channelCount
         self.byteCount = byteCount
+        self.samples = samples ?? RuntimeAudioSamples(sampleRate: sampleRate, channelCount: channelCount, samples: [])
     }
 }
 
@@ -77,24 +80,149 @@ public protocol AudioChunkConsumer: Sendable {
     func receive(_ chunk: CapturedAudioChunk) async
 }
 
+public protocol SpeechChunkConsumer: Sendable {
+    @discardableResult
+    func receive(_ chunk: SpeechChunk) async -> [TranscriptSegment]
+}
+
+public struct RuntimeAudioSamples: Equatable, Sendable {
+    public let sampleRate: Double
+    public let channelCount: Int
+    public let samples: ContiguousArray<Float>
+
+    public init(sampleRate: Double, channelCount: Int, samples: ContiguousArray<Float>) {
+        self.sampleRate = sampleRate
+        self.channelCount = channelCount
+        self.samples = samples
+    }
+
+    public init(sampleRate: Double, channelCount: Int, samples: [Float]) {
+        self.init(sampleRate: sampleRate, channelCount: channelCount, samples: ContiguousArray(samples))
+    }
+
+    public var frameCount: Int {
+        guard channelCount > 0 else {
+            return 0
+        }
+
+        return samples.count / channelCount
+    }
+
+    public var byteCount: Int {
+        samples.count * MemoryLayout<Float>.size
+    }
+}
+
+public struct SpeechChunk: Equatable, Sendable {
+    public let sessionID: UUID
+    public let lane: CaptureLane
+    public let startedAt: TimeInterval
+    public let duration: TimeInterval
+    public let sampleRate: Double
+    public let samples: ContiguousArray<Float>
+    public let isFinalInUtterance: Bool
+
+    public init(
+        sessionID: UUID,
+        lane: CaptureLane,
+        startedAt: TimeInterval,
+        duration: TimeInterval,
+        sampleRate: Double,
+        samples: ContiguousArray<Float>,
+        isFinalInUtterance: Bool = true
+    ) {
+        self.sessionID = sessionID
+        self.lane = lane
+        self.startedAt = startedAt
+        self.duration = duration
+        self.sampleRate = sampleRate
+        self.samples = samples
+        self.isFinalInUtterance = isFinalInUtterance
+    }
+}
+
+public enum RuntimeAudioFrameNormalizer {
+    public static let defaultTargetSampleRate: Double = 16_000
+
+    public static func normalizedMonoSamples(
+        _ samples: [Float],
+        sourceSampleRate: Double,
+        sourceChannelCount: Int,
+        targetSampleRate: Double = defaultTargetSampleRate
+    ) -> RuntimeAudioSamples {
+        guard sourceSampleRate > 0, sourceChannelCount > 0, !samples.isEmpty else {
+            return RuntimeAudioSamples(sampleRate: targetSampleRate, channelCount: 1, samples: [])
+        }
+
+        let sourceFrameCount = samples.count / sourceChannelCount
+        guard sourceFrameCount > 0 else {
+            return RuntimeAudioSamples(sampleRate: targetSampleRate, channelCount: 1, samples: [])
+        }
+
+        var monoSamples: [Float] = []
+        monoSamples.reserveCapacity(sourceFrameCount)
+
+        for frame in 0..<sourceFrameCount {
+            var sum: Float = 0
+            for channel in 0..<sourceChannelCount {
+                sum += samples[(frame * sourceChannelCount) + channel]
+            }
+            monoSamples.append(sum / Float(sourceChannelCount))
+        }
+
+        guard sourceSampleRate != targetSampleRate else {
+            return RuntimeAudioSamples(sampleRate: targetSampleRate, channelCount: 1, samples: monoSamples)
+        }
+
+        let targetFrameCount = max(1, Int((Double(sourceFrameCount) * targetSampleRate / sourceSampleRate).rounded()))
+        var resampled: [Float] = []
+        resampled.reserveCapacity(targetFrameCount)
+
+        for targetFrame in 0..<targetFrameCount {
+            let sourcePosition = Double(targetFrame) * sourceSampleRate / targetSampleRate
+            let lowerIndex = min(Int(sourcePosition), sourceFrameCount - 1)
+            let upperIndex = min(lowerIndex + 1, sourceFrameCount - 1)
+            let fraction = Float(sourcePosition - Double(lowerIndex))
+            let lower = monoSamples[lowerIndex]
+            let upper = monoSamples[upperIndex]
+            resampled.append(lower + ((upper - lower) * fraction))
+        }
+
+        return RuntimeAudioSamples(sampleRate: targetSampleRate, channelCount: 1, samples: resampled)
+    }
+}
+
 public actor RuntimeOnlyAudioChunkConsumer: AudioChunkConsumer {
+    private let speechChunkConsumer: (any SpeechChunkConsumer)?
+    private var vad: VADSpeechChunker
     private var activeSessionID: UUID?
     private var chunks: [CapturedAudioChunk] = []
 
-    public init() {}
+    public init(
+        speechChunkConsumer: (any SpeechChunkConsumer)? = nil,
+        vadConfiguration: VADSpeechChunker.Configuration = .default
+    ) {
+        self.speechChunkConsumer = speechChunkConsumer
+        self.vad = VADSpeechChunker(configuration: vadConfiguration)
+    }
 
     public func begin(sessionID: UUID) {
         activeSessionID = sessionID
         chunks.removeAll()
+        vad.begin(sessionID: sessionID)
     }
 
-    public func end(sessionID: UUID) {
+    public func end(sessionID: UUID) async {
         guard activeSessionID == sessionID else {
             return
         }
 
+        let speechChunks = vad.end(sessionID: sessionID)
         activeSessionID = nil
         chunks.removeAll()
+        for speechChunk in speechChunks {
+            await speechChunkConsumer?.receive(speechChunk)
+        }
     }
 
     public func receive(_ chunk: CapturedAudioChunk) async {
@@ -103,6 +231,10 @@ public actor RuntimeOnlyAudioChunkConsumer: AudioChunkConsumer {
         }
 
         chunks.append(chunk)
+        let speechChunks = vad.receive(chunk)
+        for speechChunk in speechChunks {
+            await speechChunkConsumer?.receive(speechChunk)
+        }
     }
 
     public func capturedChunks() -> [CapturedAudioChunk] {

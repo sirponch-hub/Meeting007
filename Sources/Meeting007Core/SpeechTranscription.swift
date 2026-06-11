@@ -35,11 +35,11 @@ public enum LocalSTTModelState: Equatable, Sendable {
 
 public protocol SpeechTranscribing: Sendable {
     func start(config: STTSessionConfig) async -> TranscriptionStartResult
-    func receive(_ chunk: CapturedAudioChunk) async -> [TranscriptSegment]
+    func receive(_ chunk: SpeechChunk) async -> [TranscriptSegment]
     func stop(sessionID: UUID) async -> [TranscriptSegment]
 }
 
-public actor LocalSTTPipeline {
+public actor LocalSTTPipeline: SpeechChunkConsumer {
     private let transcriber: any SpeechTranscribing
     private var activeSessionID: UUID?
     private var transcript: MeetingTranscript?
@@ -63,7 +63,7 @@ public actor LocalSTTPipeline {
     }
 
     @discardableResult
-    public func receive(_ chunk: CapturedAudioChunk) async -> [TranscriptSegment] {
+    public func receive(_ chunk: SpeechChunk) async -> [TranscriptSegment] {
         guard activeSessionID == chunk.sessionID else {
             return []
         }
@@ -120,7 +120,7 @@ public actor FakeRussianSpeechTranscriber: SpeechTranscribing {
         return .ready
     }
 
-    public func receive(_ chunk: CapturedAudioChunk) async -> [TranscriptSegment] {
+    public func receive(_ chunk: SpeechChunk) async -> [TranscriptSegment] {
         guard let activeConfig, activeConfig.sessionID == chunk.sessionID else {
             return []
         }
