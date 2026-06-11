@@ -102,6 +102,10 @@ final class RecordingShellViewModel: ObservableObject {
         state.isRecording && !previewSegments.isEmpty
     }
 
+    var canCopyFullTranscript: Bool {
+        state.isRecording && previewSegments.contains { $0.state == .final }
+    }
+
     func primaryAction() {
         if state.isRecording {
             stop()
@@ -264,6 +268,31 @@ final class RecordingShellViewModel: ObservableObject {
             copyFeedbackText = "Copied last 5 minutes, including live preview lines."
         } else {
             copyFeedbackText = "Could not copy context. Try again."
+        }
+    }
+
+    func copyFullTranscript() {
+        guard canCopyFullTranscript else {
+            copyFeedbackText = "No finalized transcript text to copy yet."
+            return
+        }
+
+        let transcript = MeetingTranscript(meetingID: previewSegments.first?.meetingID ?? UUID(), segments: previewSegments)
+        let copiedText = transcript.contextTextForFullTranscript(
+            meetingTitle: displayTitle,
+            language: "ru",
+            copiedAtText: Date().formatted(date: .omitted, time: .shortened)
+        )
+
+        guard !copiedText.isEmpty else {
+            copyFeedbackText = "No finalized transcript text to copy yet."
+            return
+        }
+
+        if clipboardWriter.write(copiedText) {
+            copyFeedbackText = "Copied full transcript from finalized lines."
+        } else {
+            copyFeedbackText = "Could not copy transcript. Try again."
         }
     }
 
@@ -554,8 +583,10 @@ struct RecordingShellView: View {
             hasStartedPreview: viewModel.hasStartedPreview,
             segments: viewModel.previewSegments,
             canCopyRecentContext: viewModel.canCopyRecentContext,
+            canCopyFullTranscript: viewModel.canCopyFullTranscript,
             copyFeedbackText: viewModel.copyFeedbackText,
-            onCopyLastFiveMinutes: viewModel.copyLastFiveMinutes
+            onCopyLastFiveMinutes: viewModel.copyLastFiveMinutes,
+            onCopyFullTranscript: viewModel.copyFullTranscript
         )
     }
 }
@@ -977,8 +1008,10 @@ struct TranscriptPanel: View {
     let hasStartedPreview: Bool
     let segments: [TranscriptSegment]
     let canCopyRecentContext: Bool
+    let canCopyFullTranscript: Bool
     let copyFeedbackText: String?
     let onCopyLastFiveMinutes: () -> Void
+    let onCopyFullTranscript: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -988,14 +1021,26 @@ struct TranscriptPanel: View {
 
                 Spacer()
 
-                Button {
-                    onCopyLastFiveMinutes()
-                } label: {
-                    Label("Copy Last 5 Minutes", systemImage: "doc.on.doc")
+                HStack(spacing: 8) {
+                    Button {
+                        onCopyFullTranscript()
+                    } label: {
+                        Label("Copy Full Transcript", systemImage: "doc.on.doc.fill")
+                    }
+                    .disabled(!canCopyFullTranscript)
+                    .help(canCopyFullTranscript ? "Copy all finalized transcript text captured so far." : "Final transcript lines will be available after speech stabilizes.")
+                    .accessibilityLabel("Copy full transcript")
+                    .accessibilityHint("Copies all finalized transcript text captured so far to the clipboard")
+
+                    Button {
+                        onCopyLastFiveMinutes()
+                    } label: {
+                        Label("Copy Last 5 Minutes", systemImage: "doc.on.doc")
+                    }
+                    .disabled(!canCopyRecentContext)
+                    .help(canCopyRecentContext ? "Copy recent meeting context." : "Transcript lines will appear here before you can copy context.")
+                    .accessibilityLabel("Copy last five minutes of transcript")
                 }
-                .disabled(!canCopyRecentContext)
-                .help(canCopyRecentContext ? "Copy recent meeting context." : "Transcript lines will appear here before you can copy context.")
-                .accessibilityLabel("Copy last five minutes of transcript")
             }
 
             VStack(alignment: .leading, spacing: 12) {

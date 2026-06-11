@@ -13,7 +13,7 @@ Required coverage:
 - Transcript segment ordering.
 - Partial-to-final segment replacement.
 - Timestamp formatting.
-- Copy full transcript.
+- Copy full finalized transcript during an active meeting, including metadata header, chronological final segments, Russian text preservation, and exclusion of partial/live text.
 - Copy last 5 minutes window selection, formatted clipboard text, metadata header, and live partial markers.
 - Markdown export.
 - Markdown file writer path, filename, folder creation, temp-file cleanup, and local-only scope.

@@ -49,6 +49,21 @@ Remind the user to consider extra skills or MCP/connectors when these moments ar
 
 ## Current Workstreams
 
+## Copy Full Transcript During Meeting
+
+- Status: Ready for Review
+- Owner: Codex + BA/UX/Architecture/QA/Developer agents
+- User outcome: User can copy the full finalized transcript captured so far during an active meeting without stopping recording or waiting for Markdown export.
+- Scope: Add `Copy Full Transcript` in the transcript panel beside `Copy Last 5 Minutes`, copy finalized current-meeting transcript lines with local metadata header, show quiet clipboard feedback, keep recording and preview running, and keep all behavior local clipboard only.
+- Out of scope: Hotkey/menu command, menu bar action, completed-session copy, Markdown export changes, REST/MCP, SQLite, real STT/audio changes, cloud sync, telemetry, and raw audio/storage changes.
+- Docs touched: `docs/product/BRD.md`, `docs/product/user-steps.md`, `docs/testing.md`, `docs/workstreams.md`.
+- Verification: Pending final `swift run Meeting007CoreChecks` and `swift build --product Meeting007App`.
+- Gates: BA accepted finalized-only full transcript copy to preserve trust; UX accepted one compact transcript-panel copy row with clear labels; architecture accepted core formatter plus app clipboard command with no storage/API changes; QA defined disabled/active/failure/no-side-effect checks; Developer defined TDD checks and app integration points; user acceptance pending; merge pending.
+- Subagents: BA, UX Designer, System Architect, Acceptance/QA, and Developer outputs summarized here. Architecture/Developer suggested partial inclusion for live copy; BA/product decision for this slice is finalized-only because `Full Transcript` should not spread unstable partial text as trusted content.
+- TDD/BDD evidence: Added core checks for full transcript metadata, inclusion of old and recent final segments, exclusion of partial/live text, and empty/partial-only transcript behavior before wiring the UI action.
+- Open decisions: Whether a future separate `Copy Live Transcript` command should include partial text; whether full-copy should become available for completed sessions/history when durable transcript browsing ships.
+- Handoff notes: `Copy Last 5 Minutes` remains the live-context action and keeps partial `(live)` lines. `Copy Full Transcript` is the safer stable transcript action.
+
 ## Process Guardrail: Mandatory Subagent Gates
 
 - Status: Ready for Review

@@ -11,6 +11,8 @@ struct Meeting007CoreChecks {
         checkCopyLastWindowCanReturnEmptyText()
         checkCopyLastWindowContextIncludesHeaderAndLiveMarker()
         checkCopyLastWindowContextCanReturnEmptyText()
+        checkFullTranscriptContextIncludesOnlyFinalSegments()
+        checkFullTranscriptContextCanReturnEmptyText()
         checkTimestampFormatterUsesMinutesAndHours()
         checkMarkdownExportIncludesOnlyFinalSegments()
         checkMarkdownFilenameSlugUsesSafeReadableText()
@@ -204,6 +206,81 @@ struct Meeting007CoreChecks {
         )
 
         require(copiedText.isEmpty, "Context copy should return empty text when no segments are available.")
+    }
+
+    private static func checkFullTranscriptContextIncludesOnlyFinalSegments() {
+        let meetingID = UUID()
+        let transcript = MeetingTranscript(meetingID: meetingID, segments: [
+            TranscriptSegment(
+                meetingID: meetingID,
+                lane: .others,
+                state: .final,
+                startTime: 10,
+                endTime: 12,
+                text: "Старый пункт тоже нужен."
+            ),
+            TranscriptSegment(
+                meetingID: meetingID,
+                lane: .me,
+                state: .partial,
+                startTime: 20,
+                endTime: 23,
+                text: "Черновик не должен выглядеть как полный транскрипт."
+            ),
+            TranscriptSegment(
+                meetingID: meetingID,
+                lane: .me,
+                state: .final,
+                startTime: 610,
+                endTime: 612,
+                text: "Новый финальный пункт."
+            )
+        ])
+
+        let copiedText = transcript.contextTextForFullTranscript(
+            meetingTitle: "Русская встреча",
+            language: "ru",
+            copiedAtText: "14:32"
+        )
+
+        require(copiedText.contains("Meeting007"), "Full transcript copy must identify the source app.")
+        require(copiedText.contains("Meeting: Русская встреча"), "Full transcript copy must include the meeting title.")
+        require(copiedText.contains("Window: Full transcript"), "Full transcript copy must identify the full transcript scope.")
+        require(copiedText.contains("Copied: 14:32"), "Full transcript copy must include copied-at text.")
+        require(copiedText.contains("Language: ru"), "Full transcript copy must include the language.")
+        require(copiedText.contains("[00:10] Others: Старый пункт тоже нужен."), "Full transcript copy must include old final segments.")
+        require(copiedText.contains("[10:10] Me: Новый финальный пункт."), "Full transcript copy must include recent final segments.")
+        require(!copiedText.contains("Черновик"), "Full transcript copy must exclude partial text until it is finalized.")
+        require(!copiedText.contains("(live)"), "Full transcript copy must not present live text as final transcript.")
+    }
+
+    private static func checkFullTranscriptContextCanReturnEmptyText() {
+        let meetingID = UUID()
+        let emptyTranscript = MeetingTranscript(meetingID: meetingID)
+        let partialOnlyTranscript = MeetingTranscript(meetingID: meetingID, segments: [
+            TranscriptSegment(
+                meetingID: meetingID,
+                lane: .others,
+                state: .partial,
+                startTime: 0,
+                endTime: 2,
+                text: "Пока только черновик."
+            )
+        ])
+
+        let emptyCopiedText = emptyTranscript.contextTextForFullTranscript(
+            meetingTitle: "Empty",
+            language: "ru",
+            copiedAtText: "14:32"
+        )
+        let partialOnlyCopiedText = partialOnlyTranscript.contextTextForFullTranscript(
+            meetingTitle: "Partial",
+            language: "ru",
+            copiedAtText: "14:32"
+        )
+
+        require(emptyCopiedText.isEmpty, "Full transcript copy should return empty text when no segments are available.")
+        require(partialOnlyCopiedText.isEmpty, "Full transcript copy should return empty text when only partial segments are available.")
     }
 
     private static func checkTimestampFormatterUsesMinutesAndHours() {

@@ -75,6 +75,8 @@ Enhancement:
 - The app must keep microphone and system audio as separate lanes.
 - The app must label local microphone speech as `Me` and remote/system audio as `Others` in v1.
 - The app must support Russian as the default transcription language.
+- During an active meeting, the app must let the user copy the full finalized transcript captured so far without stopping recording.
+- Full transcript copy must not present partial/live text as final transcript content.
 - The app must save final transcripts as Markdown.
 - The app must let the user configure the Markdown transcript storage folder.
 - The app must default Markdown transcript storage to `~/Documents/Meeting007/Transcripts/` until the user chooses another local folder.
