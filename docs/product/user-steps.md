@@ -70,8 +70,8 @@ Real microphone capture slice:
 - If permission is granted, the app starts a real local microphone lane for `Me`.
 - The transcript panel shows compact microphone lane status such as `Me · Listening`, `Me · Quiet`, or `Me · Microphone blocked`.
 - Pressing Stop stops the microphone lane and clears runtime audio chunks.
-- The visible transcript remains marked as preview-only until real local STT ships.
-- This slice does not capture system audio, does not persist raw audio, does not run real STT, and does not call any network service.
+- The visible transcript is fed through the local STT pipeline boundary, but production WhisperKit runtime is not connected yet.
+- This slice does not capture system audio, does not persist raw audio, does not download models, and does not call any network service.
 
 ## Step 5: See Live Russian Transcript
 

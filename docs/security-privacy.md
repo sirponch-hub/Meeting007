@@ -49,8 +49,9 @@ Current microphone capture slice:
 
 Current local STT model policy:
 
-- The current branch does not download or bundle Whisper model files.
-- Real WhisperKit model download, pinning, checksums, offline behavior, and user consent must be implemented as a separate model-management slice before production runtime transcription ships.
+- The current model manager pins the Russian production candidate to `large-v3-v20240930_626MB` and treats `tiny` as debug-only.
+- The app can show model readiness state in Settings, but the download action remains disabled until a separate consented installer slice is implemented.
+- The current branch does not download or bundle Whisper model files and does not add a network path.
 - Model download may fetch model artifacts only; it must never upload audio, transcripts, meeting metadata, or debug content.
 
 ## Runtime Transcript History

@@ -49,6 +49,21 @@ Remind the user to consider extra skills or MCP/connectors when these moments ar
 
 ## Current Workstreams
 
+## WhisperKit Adapter + Model Manager
+
+- Status: Ready for Review
+- Owner: Codex + BA/UX/Architecture/QA/Developer agents
+- User outcome: User can see and trust the local Russian model readiness state before production Whisper transcription is enabled, with model setup kept in Settings rather than the live meeting surface.
+- Scope: Add pinned Russian Whisper model policy, model availability states, model manager protocol, explicit prepared-artifact install boundary, model-managed STT wrapper, Settings transcription row, disabled download affordance, and documentation for consent/offline/no-upload behavior.
+- Out of scope: Adding the WhisperKit SwiftPM dependency, downloading model artifacts, validating checksums, PCM sample capture, VAD, real Russian Whisper transcription, model deletion, model marketplace, cloud fallback, telemetry, raw audio retention, and production accuracy claims.
+- Docs touched: `docs/architecture.md`, `docs/security-privacy.md`, `docs/testing.md`, `docs/product/user-steps.md`, `docs/workstreams.md`.
+- Verification: `swift run Meeting007CoreChecks` passed; `swift build --product Meeting007App` passed.
+- Gates: BA required explicit model download consent and offline-after-install behavior; UX required model controls in Settings with calm main UI; architecture issued no-go for direct WhisperKit over metadata-only `CapturedAudioChunk` and required PCM/VAD prerequisites; QA required privacy/model-state automation plus Russian manual smoke before real runtime enters `main`; Developer recommended model-manager boundary first, real dependency second; user acceptance pending; merge pending.
+- Subagents: BA, UX Designer, System Architect/macOS STT Specialist, Acceptance/QA, and Developer outputs summarized here.
+- TDD/BDD evidence: Added checks for pinned Russian model policy, missing/invalid model recoverable states, ready-model pass-through, blocking audio processing when model is unavailable, and explicit consent plus prepared local artifact requirement before install.
+- Open decisions: Exact installer/download implementation, model cache path, checksum/manifest source, offline network detection, PCM payload type, VAD/chunker, WhisperKit package pin, and Apple Silicon Russian smoke acceptance script.
+- Handoff notes: This branch intentionally does not add WhisperKit dependency or network download. Next branch should add PCM/VAD sample-bearing capture or WhisperKit adapter only after those prerequisites are accepted.
+
 ## Local STT / Whisper Russian First Slice
 
 - Status: Ready for Review

@@ -37,8 +37,10 @@ final class RecordingShellViewModel: ObservableObject {
     @Published private(set) var transcriptStorageFeedbackText: String?
     @Published private(set) var microphoneStatus: MicrophoneCaptureStatus = .idle
     @Published private(set) var transcriptionStatusText = "Local transcription ready"
+    @Published private(set) var transcriptionModelAvailability: LocalSTTModelAvailability = .missing
 
     private let microphoneStatusModel: MicrophoneCaptureStatusModel
+    private let modelManager: any LocalSTTModelManaging
     private let controller: RecordingSessionController
     private let transcriptPreviewController: LiveTranscriptPreviewController
     private let sttPipeline: LocalSTTPipeline
@@ -54,21 +56,28 @@ final class RecordingShellViewModel: ObservableObject {
     init(
         controller: RecordingSessionController? = nil,
         microphoneStatusModel: MicrophoneCaptureStatusModel = MicrophoneCaptureStatusModel(),
+        modelManager: any LocalSTTModelManaging = FakeLocalSTTModelManager(availability: .ready),
         transcriptPreviewController: LiveTranscriptPreviewController = LiveTranscriptPreviewController(),
-        sttPipeline: LocalSTTPipeline = LocalSTTPipeline(transcriber: FakeRussianSpeechTranscriber()),
+        sttPipeline: LocalSTTPipeline? = nil,
         recordingStore: any RecordingSessionStore = InMemoryRecordingSessionStore(),
         clipboardWriter: any ClipboardWriting = PasteboardClipboardWriter(),
         transcriptFolderSettings: MarkdownTranscriptFolderSettings = MarkdownTranscriptFolderSettings(),
         transcriptFileWriter: (any TranscriptFileWriting)? = nil
     ) {
         self.microphoneStatusModel = microphoneStatusModel
+        self.modelManager = modelManager
         self.controller = controller ?? RecordingSessionController(
             captureDriver: MicrophoneRecordingCaptureDriver(
                 microphone: AVAudioEngineMicrophoneCaptureDriver(statusModel: microphoneStatusModel)
             )
         )
         self.transcriptPreviewController = transcriptPreviewController
-        self.sttPipeline = sttPipeline
+        self.sttPipeline = sttPipeline ?? LocalSTTPipeline(
+            transcriber: ModelManagedSpeechTranscriber(
+                modelManager: modelManager,
+                wrapped: FakeRussianSpeechTranscriber()
+            )
+        )
         self.recordingStore = recordingStore
         self.clipboardWriter = clipboardWriter
         self.transcriptFolderSettings = transcriptFolderSettings
@@ -78,6 +87,9 @@ final class RecordingShellViewModel: ObservableObject {
         self.microphoneStatus = microphoneStatusModel.status
         self.microphoneStatusModel.onChange = { [weak self] status in
             self?.microphoneStatus = status
+        }
+        Task {
+            await refreshTranscriptionModelAvailability()
         }
     }
 
@@ -253,6 +265,10 @@ final class RecordingShellViewModel: ObservableObject {
     func resetTranscriptFolderToDefault() {
         transcriptFolderSettings.resetToDefault()
         refreshTranscriptFolderWriter(feedback: "New Markdown transcripts will use the default folder.")
+    }
+
+    func refreshTranscriptionModelAvailability() async {
+        transcriptionModelAvailability = await modelManager.availability(for: .defaultRussian)
     }
 
     func retryMarkdownExport() {
@@ -704,10 +720,17 @@ struct RecordingShellView: View {
                 SettingsView(
                     folderURL: viewModel.transcriptFolderURL,
                     feedbackText: viewModel.transcriptStorageFeedbackText,
+                    modelAvailability: viewModel.transcriptionModelAvailability,
+                    modelPolicy: .defaultRussian,
                     onChooseFolder: viewModel.chooseTranscriptFolder,
                     onRevealFolder: viewModel.revealTranscriptFolder,
                     onCopyPath: viewModel.copyTranscriptFolderPath,
-                    onResetToDefault: viewModel.resetTranscriptFolderToDefault
+                    onResetToDefault: viewModel.resetTranscriptFolderToDefault,
+                    onRefreshModelStatus: {
+                        Task {
+                            await viewModel.refreshTranscriptionModelAvailability()
+                        }
+                    }
                 )
             }
         }
@@ -855,10 +878,13 @@ enum ShellSection: Equatable {
 struct SettingsView: View {
     let folderURL: URL
     let feedbackText: String?
+    let modelAvailability: LocalSTTModelAvailability
+    let modelPolicy: WhisperModelPolicy
     let onChooseFolder: () -> Void
     let onRevealFolder: () -> Void
     let onCopyPath: () -> Void
     let onResetToDefault: () -> Void
+    let onRefreshModelStatus: () -> Void
 
     var body: some View {
         ScrollView {
@@ -887,9 +913,75 @@ struct SettingsView: View {
                 .padding(16)
                 .background(Color(nsColor: .controlBackgroundColor))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Transcription")
+                        .font(.headline)
+
+                    TranscriptionModelSettingRow(
+                        availability: modelAvailability,
+                        policy: modelPolicy,
+                        onRefresh: onRefreshModelStatus
+                    )
+                }
+                .padding(16)
+                .background(Color(nsColor: .controlBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
             }
             .padding(.horizontal, 24)
             .padding(.vertical, 22)
+        }
+    }
+}
+
+struct TranscriptionModelSettingRow: View {
+    let availability: LocalSTTModelAvailability
+    let policy: WhisperModelPolicy
+    let onRefresh: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Label("Russian speech model", systemImage: "waveform.and.magnifyingglass")
+                    .font(.callout.weight(.semibold))
+                Spacer()
+                Text(availability.userFacingTitle)
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(statusColor)
+            }
+
+            Text("Meeting007 will use \(policy.modelID) for Russian transcription. The model artifact is about \(formattedSize) and stays on this Mac.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+            Text("The model download fetches only the transcription model artifact. Meeting007 does not upload audio, transcripts, meeting titles, participants, or debug content. After the model is installed, Russian transcription works offline on this Mac.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 8) {
+                Button("Refresh Status", action: onRefresh)
+                    .buttonStyle(.bordered)
+                Button("Download Model...") {}
+                    .buttonStyle(.borderedProminent)
+                    .disabled(true)
+                    .help("Model download consent and installation will be enabled in the WhisperKit runtime slice.")
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var formattedSize: String {
+        ByteCountFormatter.string(fromByteCount: Int64(policy.approximateSizeInBytes), countStyle: .file)
+    }
+
+    private var statusColor: Color {
+        switch availability {
+        case .ready:
+            return .green
+        case .missing, .invalid, .downloadFailed:
+            return .orange
+        case .downloading:
+            return .accentColor
         }
     }
 }
