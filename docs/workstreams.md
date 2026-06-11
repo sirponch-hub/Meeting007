@@ -49,6 +49,21 @@ Remind the user to consider extra skills or MCP/connectors when these moments ar
 
 ## Current Workstreams
 
+## WhisperKit Real Adapter Dependency Spike
+
+- Status: Ready for Review
+- Owner: Codex + BA/UX/Architecture/QA/Developer agents
+- User outcome: Meeting007 now proves it can compile a real local WhisperKit adapter behind the existing `SpeechChunk` STT boundary, without changing the meeting-time Start/Stop workflow or introducing cloud transcription.
+- Scope: Add SwiftPM dependency on `argmaxinc/argmax-oss-swift`, isolate `WhisperKit` in `Meeting007WhisperKit`, add `WhisperKitSpeechTranscriber` contract adapter, keep Russian default, reject missing model without auto-download, preserve fake STT, and add dedicated adapter checks.
+- Out of scope: Consented model installer/download UI, production model path management, real app runtime switch to WhisperKit, Russian accuracy benchmark, latency tuning, system audio STT, diarization, raw audio retention, hosted backend, and cloud fallback.
+- Docs touched: `docs/architecture.md`, `docs/security-privacy.md`, `docs/testing.md`, `docs/workstreams.md`.
+- Verification: `swift run Meeting007WhisperKitChecks` passed with dependency resolution; final core/app verification pending in this branch.
+- Gates: BA accepted dependency spike as proof of local real-STT readiness; UX required no new debug UI and Settings-only model readiness; architecture required isolated target and compile-only boundary; QA required missing-model/no-download, Russian default, `SpeechChunk` boundary, fake fallback, and privacy checks; Developer required TDD checks before implementation; user acceptance pending; merge pending.
+- Subagents: BA, UX Designer, System Architect/macOS STT Specialist, Acceptance/QA, and Developer outputs summarized here.
+- TDD/BDD evidence: Added `Meeting007WhisperKitChecks` for Russian default, `SpeechChunk` acceptance, missing model without download, transcript segment mapping, fake STT non-regression, and no file persistence in adapter validation.
+- Open decisions: Exact model cache path, consented installer UX, checksum/manifest policy, opt-in real model integration harness, app-level runtime switch, and Russian benchmark acceptance threshold.
+- Handoff notes: SwiftPM resolved `argmax-oss-swift` at `0.18.0` from the `from: 0.9.0` constraint. This branch compiles the real SDK but uses a fake WhisperKit engine for deterministic checks; do not wire automatic download or cloud fallback into the app.
+
 ## PCM/VAD Sample-Bearing Capture
 
 - Status: Ready for Review
