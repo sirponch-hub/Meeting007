@@ -30,6 +30,12 @@ struct Meeting007CoreChecks {
         await checkMicrophoneChunksCarrySessionAndLane()
         await checkMicrophoneStartFailureReturnsStableError()
         await checkRuntimeAudioChunksDoNotPersistIntoMarkdown()
+        await checkLocalSTTDefaultsToRussian()
+        await checkSTTMapsMicLaneToMeSegments()
+        await checkSTTEmitsPartialThenFinalForSameSegmentID()
+        await checkSTTIgnoresChunksAfterSessionStops()
+        await checkMissingModelReturnsRecoverableUnavailableState()
+        await checkFinalSTTSegmentsAreExportableToMarkdown()
         await checkDefaultRecordingLanguageIsRussian()
         await checkLiveTranscriptPreviewEmitsRussianSegments()
         await checkLiveTranscriptPreviewReplacesPartialWithFinal()
@@ -646,6 +652,133 @@ struct Meeting007CoreChecks {
         } catch {
             require(false, "Runtime audio Markdown export must not throw: \(error)")
         }
+    }
+
+    private static func checkLocalSTTDefaultsToRussian() async {
+        let config = STTSessionConfig(sessionID: UUID())
+
+        require(config.language == "ru", "Local STT must default to Russian.")
+        require(config.lane == .mic, "First local STT slice must default to the microphone lane.")
+    }
+
+    private static func checkSTTMapsMicLaneToMeSegments() async {
+        let sessionID = UUID()
+        let transcriber = FakeRussianSpeechTranscriber()
+        let pipeline = LocalSTTPipeline(transcriber: transcriber)
+
+        let start = await pipeline.start(STTSessionConfig(sessionID: sessionID))
+        let segments = await pipeline.receive(CapturedAudioChunk(
+            sessionID: sessionID,
+            lane: .mic,
+            startedAt: 0,
+            duration: 1.2,
+            sampleRate: 16_000,
+            channelCount: 1,
+            byteCount: 3_200
+        ))
+
+        require(start == .ready, "Fake local STT must start when the model is ready.")
+        require(segments.first?.lane == .me, "Mic STT segments must map to the Me transcript lane.")
+        require(segments.first?.meetingID == sessionID, "STT segments must keep the active meeting ID.")
+        require(segments.first?.text.contains("локальная") == true, "Fake Russian STT must emit Russian text for deterministic checks.")
+    }
+
+    private static func checkSTTEmitsPartialThenFinalForSameSegmentID() async {
+        let sessionID = UUID()
+        let pipeline = LocalSTTPipeline(transcriber: FakeRussianSpeechTranscriber())
+
+        _ = await pipeline.start(STTSessionConfig(sessionID: sessionID))
+        let partialSegments = await pipeline.receive(CapturedAudioChunk(
+            sessionID: sessionID,
+            lane: .mic,
+            startedAt: 0,
+            duration: 1.2,
+            sampleRate: 16_000,
+            channelCount: 1,
+            byteCount: 3_200
+        ))
+        let finalSegments = await pipeline.receive(CapturedAudioChunk(
+            sessionID: sessionID,
+            lane: .mic,
+            startedAt: 1.2,
+            duration: 1.4,
+            sampleRate: 16_000,
+            channelCount: 1,
+            byteCount: 3_200
+        ))
+
+        require(partialSegments.first?.state == .partial, "First STT update must be partial.")
+        require(finalSegments.first?.state == .final, "Second STT update must finalize the same segment.")
+        require(partialSegments.first?.id == finalSegments.first?.id, "Partial and final STT updates must reuse a stable segment ID.")
+        require(finalSegments.first?.endTime ?? 0 > partialSegments.first?.endTime ?? 0, "Final STT segment must preserve later timing.")
+    }
+
+    private static func checkSTTIgnoresChunksAfterSessionStops() async {
+        let sessionID = UUID()
+        let pipeline = LocalSTTPipeline(transcriber: FakeRussianSpeechTranscriber())
+
+        _ = await pipeline.start(STTSessionConfig(sessionID: sessionID))
+        _ = await pipeline.stop(sessionID: sessionID)
+        let lateSegments = await pipeline.receive(CapturedAudioChunk(
+            sessionID: sessionID,
+            lane: .mic,
+            startedAt: 3,
+            duration: 1,
+            sampleRate: 16_000,
+            channelCount: 1,
+            byteCount: 1_024
+        ))
+
+        require(lateSegments.isEmpty, "Local STT must ignore runtime chunks after stop.")
+    }
+
+    private static func checkMissingModelReturnsRecoverableUnavailableState() async {
+        let pipeline = LocalSTTPipeline(transcriber: FakeRussianSpeechTranscriber(modelState: .missing))
+
+        let start = await pipeline.start(STTSessionConfig(sessionID: UUID()))
+
+        require(start == .unavailable(TranscriptionFailure(
+            code: "local_stt_model_missing",
+            message: "The Russian speech model is not installed on this Mac."
+        )), "Missing local STT model must return a stable recoverable state.")
+    }
+
+    private static func checkFinalSTTSegmentsAreExportableToMarkdown() async {
+        let sessionID = UUID()
+        let pipeline = LocalSTTPipeline(transcriber: FakeRussianSpeechTranscriber())
+
+        _ = await pipeline.start(STTSessionConfig(sessionID: sessionID))
+        _ = await pipeline.receive(CapturedAudioChunk(
+            sessionID: sessionID,
+            lane: .mic,
+            startedAt: 0,
+            duration: 1.2,
+            sampleRate: 16_000,
+            channelCount: 1,
+            byteCount: 3_200
+        ))
+        let finalSegments = await pipeline.receive(CapturedAudioChunk(
+            sessionID: sessionID,
+            lane: .mic,
+            startedAt: 1.2,
+            duration: 1.4,
+            sampleRate: 16_000,
+            channelCount: 1,
+            byteCount: 3_200
+        ))
+        let metadata = MeetingMetadata(
+            id: sessionID,
+            title: "Локальная STT проверка",
+            startedAt: Date(timeIntervalSince1970: 0),
+            endedAt: Date(timeIntervalSince1970: 30)
+        )
+        let markdown = MarkdownTranscriptExporter.export(
+            metadata: metadata,
+            transcript: MeetingTranscript(meetingID: sessionID, segments: finalSegments)
+        )
+
+        require(markdown.contains("Me: Это локальная русская транскрибация."), "Markdown export must include final local STT text.")
+        require(!markdown.contains("partial"), "Markdown export must not include partial local STT text.")
     }
 
     private static func checkDefaultRecordingLanguageIsRussian() async {

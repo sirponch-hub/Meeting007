@@ -49,6 +49,21 @@ Remind the user to consider extra skills or MCP/connectors when these moments ar
 
 ## Current Workstreams
 
+## Local STT / Whisper Russian First Slice
+
+- Status: Ready for Review
+- Owner: Codex + BA/UX/Architecture/QA/Developer agents
+- User outcome: User sees the transcript area fed through a local Russian STT pipeline boundary instead of a standalone mock-preview controller, so copy/export flows can consume the same kind of segments that the real Whisper runtime will produce.
+- Scope: Add Russian-first STT session config, local STT pipeline lifecycle, deterministic fake Russian transcriber, missing-model state, stopped-session chunk rejection, UI local-transcription status, and wiring from recording start/stop to STT segments.
+- Out of scope: Real WhisperKit adapter, model download, model bundling, model benchmark, PCM sample capture, VAD/chunker, system audio STT, diarization, cloud fallback, raw audio persistence, REST/MCP persistence, and production accuracy claims.
+- Docs touched: `docs/architecture.md`, `docs/security-privacy.md`, `docs/testing.md`, `docs/product/BRD.md`, `docs/workstreams.md`.
+- Verification: `swift run Meeting007CoreChecks` passed. `swift build --product Meeting007App` passed after code changes; final repeat build after documentation-only updates was blocked by the tool usage limit, not by a project error.
+- Gates: BA confirmed local Russian STT user outcome and privacy constraints; UX accepted quiet loading/listening/transcribing/error states; architecture recommended WhisperKit behind `SpeechTranscribing` with model policy as a separate slice; QA defined deterministic fake STT checks plus manual Russian QA for real runtime; Developer recommended a mergeable STT contract/fake-transcriber slice before real runtime dependency; user acceptance pending; merge pending.
+- Subagents: BA, UX Designer, System Architect/macOS STT Specialist, Acceptance/QA, and Developer outputs summarized here.
+- TDD/BDD evidence: Added checks for Russian default, mic-to-`Me` mapping, partial-to-final stable segment identity, ignoring chunks after Stop, missing model recoverable state, and Markdown export of final STT segments before/alongside implementation.
+- Open decisions: Exact WhisperKit model default (`large-v3-v20240930_626MB` vs `large-v3-v20240930_turbo`), model download consent UX, model storage path/checksum policy, PCM sample representation, VAD thresholds, latency budget for acceptance, and whether recording may proceed when the local model is missing.
+- Handoff notes: This branch intentionally does not download Whisper models or claim production STT accuracy. Next branch should implement WhisperKit adapter and model manager behind `SpeechTranscribing`, plus PCM/VAD path from `AVAudioEngine`.
+
 ## Real Microphone Capture Lane
 
 - Status: Done

@@ -75,7 +75,8 @@ Enhancement:
 - The app must keep microphone and system audio as separate lanes.
 - The app must label local microphone speech as `Me` and remote/system audio as `Others` in v1.
 - The first real capture slice must prove local microphone capture with visible `Me` lane activity before real local STT is connected.
-- The UI must not imply that preview transcript text comes from microphone audio until real local STT ships.
+- The app must route live transcript text through a local STT pipeline boundary before the production Whisper runtime is connected.
+- The UI must not imply that deterministic STT pipeline text is production Whisper output until real local Whisper runtime ships.
 - The app must support Russian as the default transcription language.
 - During an active meeting, the app must let the user copy the full finalized transcript captured so far without stopping recording.
 - Full transcript copy must not present partial/live text as final transcript content.

@@ -36,10 +36,12 @@ final class RecordingShellViewModel: ObservableObject {
     @Published private(set) var transcriptFolderURL: URL
     @Published private(set) var transcriptStorageFeedbackText: String?
     @Published private(set) var microphoneStatus: MicrophoneCaptureStatus = .idle
+    @Published private(set) var transcriptionStatusText = "Local transcription ready"
 
     private let microphoneStatusModel: MicrophoneCaptureStatusModel
     private let controller: RecordingSessionController
     private let transcriptPreviewController: LiveTranscriptPreviewController
+    private let sttPipeline: LocalSTTPipeline
     private let recordingStore: any RecordingSessionStore
     private let clipboardWriter: any ClipboardWriting
     private let transcriptFolderSettings: MarkdownTranscriptFolderSettings
@@ -53,6 +55,7 @@ final class RecordingShellViewModel: ObservableObject {
         controller: RecordingSessionController? = nil,
         microphoneStatusModel: MicrophoneCaptureStatusModel = MicrophoneCaptureStatusModel(),
         transcriptPreviewController: LiveTranscriptPreviewController = LiveTranscriptPreviewController(),
+        sttPipeline: LocalSTTPipeline = LocalSTTPipeline(transcriber: FakeRussianSpeechTranscriber()),
         recordingStore: any RecordingSessionStore = InMemoryRecordingSessionStore(),
         clipboardWriter: any ClipboardWriting = PasteboardClipboardWriter(),
         transcriptFolderSettings: MarkdownTranscriptFolderSettings = MarkdownTranscriptFolderSettings(),
@@ -65,6 +68,7 @@ final class RecordingShellViewModel: ObservableObject {
             )
         )
         self.transcriptPreviewController = transcriptPreviewController
+        self.sttPipeline = sttPipeline
         self.recordingStore = recordingStore
         self.clipboardWriter = clipboardWriter
         self.transcriptFolderSettings = transcriptFolderSettings
@@ -150,7 +154,7 @@ final class RecordingShellViewModel: ObservableObject {
             apply(nextState)
 
             if nextState.isRecording {
-                await startTranscriptPreview()
+                await startLocalTranscription()
                 startTimer()
             }
         }
@@ -165,7 +169,13 @@ final class RecordingShellViewModel: ObservableObject {
         stopTranscriptPreviewTimer()
 
         Task {
-            let frozenSegments = await transcriptPreviewController.visibleSegments()
+            let currentSessionID = await controller.currentSession()?.id
+            let frozenSegments: [TranscriptSegment]
+            if let currentSessionID {
+                frozenSegments = await sttPipeline.stop(sessionID: currentSessionID)
+            } else {
+                frozenSegments = previewSegments
+            }
             await transcriptPreviewController.stop()
             previewSegments = frozenSegments
             let nextState = await controller.stopManualRecording()
@@ -383,6 +393,53 @@ final class RecordingShellViewModel: ObservableObject {
 
     private func advanceTranscriptPreview() async {
         previewSegments = await transcriptPreviewController.advance()
+    }
+
+    private func startLocalTranscription() async {
+        guard let session = await controller.currentSession() else {
+            return
+        }
+
+        hasStartedPreview = true
+        previewSegments = []
+        transcriptionStatusText = "Loading Russian speech model..."
+
+        let startResult = await sttPipeline.start(STTSessionConfig(sessionID: session.id))
+        guard startResult == .ready else {
+            transcriptionStatusText = "Local transcription unavailable"
+            if case let .unavailable(failure) = startResult {
+                errorMessage = failure.message
+            }
+            return
+        }
+
+        transcriptionStatusText = "Transcribing locally"
+        await advanceLocalTranscription(sessionID: session.id, startedAt: 0)
+
+        stopTranscriptPreviewTimer()
+        transcriptPreviewTimer = Timer.scheduledTimer(withTimeInterval: 1.8, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self,
+                      let activeSessionID = await self.controller.currentSession()?.id else {
+                    return
+                }
+
+                let latestEndTime = self.previewSegments.map(\.endTime).max() ?? 0
+                await self.advanceLocalTranscription(sessionID: activeSessionID, startedAt: latestEndTime)
+            }
+        }
+    }
+
+    private func advanceLocalTranscription(sessionID: UUID, startedAt: TimeInterval) async {
+        previewSegments = await sttPipeline.receive(CapturedAudioChunk(
+            sessionID: sessionID,
+            lane: .mic,
+            startedAt: startedAt,
+            duration: 1.2,
+            sampleRate: 16_000,
+            channelCount: 1,
+            byteCount: 3_200
+        ))
     }
 
     private func stopTranscriptPreviewTimer() {
@@ -778,6 +835,7 @@ struct RecordingShellView: View {
         TranscriptPanel(
             state: viewModel.state,
             microphoneStatus: viewModel.microphoneStatus,
+            transcriptionStatusText: viewModel.transcriptionStatusText,
             hasStartedPreview: viewModel.hasStartedPreview,
             segments: viewModel.previewSegments,
             canCopyRecentContext: viewModel.canCopyRecentContext,
@@ -1204,6 +1262,7 @@ struct RecentRecordingTreeRow: View {
 struct TranscriptPanel: View {
     let state: RecordingState
     let microphoneStatus: MicrophoneCaptureStatus
+    let transcriptionStatusText: String
     let hasStartedPreview: Bool
     let segments: [TranscriptSegment]
     let canCopyRecentContext: Bool
@@ -1250,6 +1309,7 @@ struct TranscriptPanel: View {
                 }
 
                 MicrophoneLaneIndicator(status: microphoneStatus, isRecording: state.isRecording)
+                LocalTranscriptionStatusRow(statusText: transcriptionStatusText, isRecording: state.isRecording)
 
                 if shouldShowPreview {
                     TranscriptPreviewBanner(isRecording: state.isRecording)
@@ -1363,6 +1423,26 @@ struct MicrophoneLaneIndicator: View {
     }
 }
 
+struct LocalTranscriptionStatusRow: View {
+    let statusText: String
+    let isRecording: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "waveform.and.magnifyingglass")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(isRecording ? Color.accentColor : Color.secondary)
+                .frame(width: 18)
+            Text(isRecording ? statusText : "Transcription runs locally on this Mac")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(isRecording ? statusText : "Transcription runs locally on this Mac")
+    }
+}
+
 struct TranscriptPreviewBanner: View {
     let isRecording: Bool
 
@@ -1375,7 +1455,7 @@ struct TranscriptPreviewBanner: View {
                 Text("Preview transcript")
                     .font(.subheadline.weight(.semibold))
             }
-            Text(isRecording ? "Mock Russian segments are shown while live transcription is being wired in. This is not real audio transcription yet." : "This sample transcript was generated for the placeholder experience.")
+            Text(isRecording ? "Local Russian transcription is connected through the STT pipeline. WhisperKit runtime wiring is the next adapter slice." : "This transcript was generated by the local STT pipeline for the current session.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
