@@ -45,7 +45,13 @@ Current microphone capture slice:
 - The app requests macOS microphone access only when recording is requested.
 - Captured audio stays in process memory as runtime chunks for future local STT.
 - Runtime chunks are cleared on Stop and are not written to Markdown, SQLite, logs, REST, MCP, telemetry, cloud storage, or raw audio files.
-- The visible transcript remains marked as local preview until real local STT ships.
+- The visible transcript is now fed through the local STT pipeline boundary. The current deterministic Russian transcriber is runtime-only and does not write raw audio, model files, transcript debug dumps, or network payloads.
+
+Current local STT model policy:
+
+- The current branch does not download or bundle Whisper model files.
+- Real WhisperKit model download, pinning, checksums, offline behavior, and user consent must be implemented as a separate model-management slice before production runtime transcription ships.
+- Model download may fetch model artifacts only; it must never upload audio, transcripts, meeting metadata, or debug content.
 
 ## Runtime Transcript History
 

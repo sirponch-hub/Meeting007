@@ -20,6 +20,7 @@ Required coverage:
 - Markdown transcript folder setting, default folder behavior, selected-folder persistence, write-access validation, and recoverable unavailable-folder errors.
 - Microphone recording lifecycle with fake capture: Start opens one mic lane, Stop closes it, late chunks are rejected, chunk metadata remains session/lane/timing aware, and microphone start failures surface stable user-facing errors.
 - Runtime-only audio behavior: fake mic chunks do not create raw audio files and Markdown export does not reference audio artifacts.
+- Local STT pipeline behavior: Russian default configuration, mic-to-`Me` lane mapping, partial-to-final updates with stable segment identity, stopped-session chunk rejection, missing-model recoverable state, and exportability of final STT segments.
 - Completed-session runtime history after Stop.
 - In-memory history deduplication and newest-first ordering.
 - Google Calendar event mapping from title/topic, time, and participants into local meeting metadata using mocked provider fixtures.
