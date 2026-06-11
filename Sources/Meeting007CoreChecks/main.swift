@@ -31,6 +31,11 @@ struct Meeting007CoreChecks {
         await checkMicrophoneStartFailureReturnsStableError()
         await checkRuntimeAudioChunksDoNotPersistIntoMarkdown()
         await checkLocalSTTDefaultsToRussian()
+        checkWhisperModelPolicyDefaultsToRussianPinnedModel()
+        await checkMissingModelBlocksTranscriptionBeforeAudioProcessing()
+        await checkInvalidModelReturnsRecoverableUnavailableState()
+        await checkReadyModelAllowsCurrentFakeTranscriberFlow()
+        checkModelInstallRequiresExplicitPreparedLocalArtifact()
         await checkSTTMapsMicLaneToMeSegments()
         await checkSTTEmitsPartialThenFinalForSameSegmentID()
         await checkSTTIgnoresChunksAfterSessionStops()
@@ -659,6 +664,101 @@ struct Meeting007CoreChecks {
 
         require(config.language == "ru", "Local STT must default to Russian.")
         require(config.lane == .mic, "First local STT slice must default to the microphone lane.")
+    }
+
+    private static func checkWhisperModelPolicyDefaultsToRussianPinnedModel() {
+        let policy = WhisperModelPolicy.defaultRussian
+
+        require(policy.modelID == "large-v3-v20240930_626MB", "Production model policy must pin the Russian quality model explicitly.")
+        require(policy.language == "ru", "Production model policy must be Russian-first.")
+        require(policy.approximateSizeInBytes == 626_000_000, "Model policy must disclose the approximate model size.")
+        require(policy.isDebugOnly == false, "Production model policy must not use a debug-only model.")
+        require(WhisperModelPolicy.debugTiny.isDebugOnly, "Tiny Whisper model must remain debug-only.")
+    }
+
+    private static func checkMissingModelBlocksTranscriptionBeforeAudioProcessing() async {
+        let manager = FakeLocalSTTModelManager(availability: .missing)
+        let transcriber = ModelManagedSpeechTranscriber(
+            modelManager: manager,
+            wrapped: FakeRussianSpeechTranscriber()
+        )
+        let pipeline = LocalSTTPipeline(transcriber: transcriber)
+        let sessionID = UUID()
+
+        let start = await pipeline.start(STTSessionConfig(sessionID: sessionID))
+        let segments = await pipeline.receive(CapturedAudioChunk(
+            sessionID: sessionID,
+            lane: .mic,
+            startedAt: 0,
+            duration: 1,
+            sampleRate: 16_000,
+            channelCount: 1,
+            byteCount: 1_024
+        ))
+        let requestedPolicies = await manager.requestedPolicies()
+
+        require(start == .unavailable(TranscriptionFailure(
+            code: "local_stt_model_missing",
+            message: "The Russian transcription model is not installed on this Mac."
+        )), "Missing model must block transcription with a recoverable stable state.")
+        require(segments.isEmpty, "STT must not process audio chunks when the model is missing.")
+        require(requestedPolicies == [.defaultRussian], "Model manager must check the pinned Russian model policy.")
+    }
+
+    private static func checkInvalidModelReturnsRecoverableUnavailableState() async {
+        let manager = FakeLocalSTTModelManager(availability: .invalid("checksum mismatch"))
+        let transcriber = ModelManagedSpeechTranscriber(
+            modelManager: manager,
+            wrapped: FakeRussianSpeechTranscriber()
+        )
+        let pipeline = LocalSTTPipeline(transcriber: transcriber)
+
+        let start = await pipeline.start(STTSessionConfig(sessionID: UUID()))
+
+        require(start == .unavailable(TranscriptionFailure(
+            code: "local_stt_model_invalid",
+            message: "The Russian transcription model could not be verified. Download it again."
+        )), "Invalid model must return a stable recoverable state.")
+    }
+
+    private static func checkReadyModelAllowsCurrentFakeTranscriberFlow() async {
+        let manager = FakeLocalSTTModelManager(availability: .ready)
+        let transcriber = ModelManagedSpeechTranscriber(
+            modelManager: manager,
+            wrapped: FakeRussianSpeechTranscriber()
+        )
+        let pipeline = LocalSTTPipeline(transcriber: transcriber)
+        let sessionID = UUID()
+
+        let start = await pipeline.start(STTSessionConfig(sessionID: sessionID))
+        let segments = await pipeline.receive(CapturedAudioChunk(
+            sessionID: sessionID,
+            lane: .mic,
+            startedAt: 0,
+            duration: 1,
+            sampleRate: 16_000,
+            channelCount: 1,
+            byteCount: 1_024
+        ))
+
+        require(start == .ready, "Ready model state must allow the STT pipeline to start.")
+        require(segments.first?.state == .partial, "Ready model state must preserve current partial transcript behavior.")
+    }
+
+    private static func checkModelInstallRequiresExplicitPreparedLocalArtifact() {
+        let request = LocalSTTModelInstallRequest(
+            policy: .defaultRussian,
+            consentGranted: false,
+            preparedLocalArtifactURL: nil
+        )
+
+        require(!request.canInstall, "Model install must not begin without explicit consent and a prepared local artifact boundary.")
+        let consentedRequest = LocalSTTModelInstallRequest(
+            policy: .defaultRussian,
+            consentGranted: true,
+            preparedLocalArtifactURL: URL(fileURLWithPath: "/tmp/model")
+        )
+        require(consentedRequest.canInstall, "Model install boundary requires consent plus a local artifact path.")
     }
 
     private static func checkSTTMapsMicLaneToMeSegments() async {

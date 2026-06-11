@@ -65,7 +65,10 @@ Current implemented STT boundary:
 - `LocalSTTPipeline` owns active-session lifecycle, accepts runtime audio chunks, upserts partial/final `TranscriptSegment` updates, ignores chunks after Stop, and exposes visible segments for UI/copy/export.
 - `SpeechTranscribing` is the runtime protocol that real WhisperKit or another local STT adapter will implement.
 - `FakeRussianSpeechTranscriber` provides deterministic Russian partial/final segments for CI-safe checks and UI wiring without cloud or model files.
-- The current app wiring uses the STT boundary as the transcript source. Real WhisperKit model loading, PCM sample conversion, VAD chunking, and model download/pinning are the next adapter slice.
+- `WhisperModelPolicy.defaultRussian` pins `large-v3-v20240930_626MB` as the production Russian model candidate and keeps `tiny` debug-only.
+- `LocalSTTModelManaging` owns model readiness checks without downloading or uploading anything.
+- `ModelManagedSpeechTranscriber` blocks transcription when the pinned model is missing, invalid, downloading, or failed, and passes through to the current transcriber only when the model is ready.
+- The app Settings surface shows Russian model status and artifact-only trust copy. Real WhisperKit model loading, model download, PCM sample conversion, and VAD chunking are the next adapter slices.
 
 ## Storage
 
