@@ -74,4 +74,30 @@ public struct MeetingTranscript: Equatable, Sendable {
 
         return "\(header)\n\n\(body)"
     }
+
+    public func contextTextForFullTranscript(
+        meetingTitle: String,
+        language: String,
+        copiedAtText: String
+    ) -> String {
+        let finalSegments = finalizedSegments()
+        guard !finalSegments.isEmpty else {
+            return ""
+        }
+
+        let header = [
+            "Meeting007",
+            "Meeting: \(meetingTitle)",
+            "Window: Full transcript",
+            "Copied: \(copiedAtText)",
+            "Language: \(language)"
+        ].joined(separator: "\n")
+        let body = finalSegments
+            .map { segment in
+                "[\(TimestampFormatter.format(segment.startTime))] \(segment.speakerLabel): \(segment.text)"
+            }
+            .joined(separator: "\n")
+
+        return "\(header)\n\n\(body)"
+    }
 }

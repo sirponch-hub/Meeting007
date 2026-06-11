@@ -51,18 +51,33 @@ Remind the user to consider extra skills or MCP/connectors when these moments ar
 
 ## Real Microphone Capture Lane
 
-- Status: Ready for Review
+- Status: Done
 - Owner: Codex + BA/UX/Architecture/QA/Developer agents
 - User outcome: User can press Start and know Meeting007 is really listening to the Mac microphone as the `Me` lane, while still understanding that visible transcript text is preview-only until local STT ships.
 - Scope: Manual Start requests microphone permission when needed, starts an `AVAudioEngine` microphone lane, shows compact `Me` lane status, stops and clears runtime audio on Stop, exposes recoverable permission-denied state, and keeps audio runtime-only.
 - Out of scope: Real STT, system audio capture, device picker, raw audio retention, SQLite, REST/MCP, hotkeys/menu bar, cloud fallback, diarization, and calendar-triggered capture.
 - Docs touched: `docs/architecture.md`, `docs/security-privacy.md`, `docs/testing.md`, `docs/workstreams.md`.
-- Verification: `swift run Meeting007CoreChecks` passed before app wiring; `swift build --product Meeting007App` passed after app wiring. Final verification pending after documentation updates.
-- Gates: BA defined user outcome and exclusions; UX accepted compact `Me · Listening/Quiet/Blocked` lane and denied-permission recovery; architecture accepted `RecordingCaptureDriver` as the integration boundary and AVFoundation at the app edge; QA defined lifecycle, permission, no-persistence, and manual Apple Silicon checks; Developer defined TDD slice and fake mic checks; implementation complete; user acceptance pending; merge pending.
+- Verification: `swift run Meeting007CoreChecks` passed; `swift build --product Meeting007App` passed before acceptance. Final post-merge verification recorded below after both accepted features merged.
+- Gates: BA defined user outcome and exclusions; UX accepted compact `Me · Listening/Quiet/Blocked` lane and denied-permission recovery; architecture accepted `RecordingCaptureDriver` as the integration boundary and AVFoundation at the app edge; QA defined lifecycle, permission, no-persistence, and manual Apple Silicon checks; Developer defined TDD slice and fake mic checks; implementation complete; user accepted; merge complete.
 - Subagents: BA, UX Designer, System Architect/macOS Audio Specialist, Acceptance/QA, and Developer outputs summarized in this entry. Key shared decision: this slice proves live mic capture without implying real transcription.
 - TDD/BDD evidence: Added fake microphone lifecycle checks in `Meeting007CoreChecks` before platform driver verification: start opens mic lane, stop closes it, chunks carry `.mic` metadata, permission failure surfaces stable error, and Markdown export does not create/reference audio artifacts.
 - Open decisions: Whether to add input-device selection in Settings; whether future raw audio retention defaults to keep-local-for-correction or auto-delete after transcript finalization; whether first real STT slice consumes PCM buffers directly or through a VAD/chunker actor.
 - Handoff notes: The transcript panel still uses the existing mock Russian preview. Do not connect fake transcript progress to mic level; that would make users think real audio is being transcribed.
+
+## Copy Full Transcript During Meeting
+
+- Status: Done
+- Owner: Codex + BA/UX/Architecture/QA/Developer agents
+- User outcome: User can copy the full finalized transcript captured so far during an active meeting without stopping recording or waiting for Markdown export.
+- Scope: Add `Copy Full Transcript` in the transcript panel beside `Copy Last 5 Minutes`, copy finalized current-meeting transcript lines with local metadata header, show quiet clipboard feedback, keep recording and preview running, and keep all behavior local clipboard only.
+- Out of scope: Hotkey/menu command, menu bar action, completed-session copy, Markdown export changes, REST/MCP, SQLite, real STT/audio changes, cloud sync, telemetry, and raw audio/storage changes.
+- Docs touched: `docs/product/BRD.md`, `docs/product/user-steps.md`, `docs/testing.md`, `docs/workstreams.md`.
+- Verification: `swift run Meeting007CoreChecks` passed; `swift build --product Meeting007App` passed before acceptance. Final post-merge verification recorded below after both accepted features merged.
+- Gates: BA accepted finalized-only full transcript copy to preserve trust; UX accepted one compact transcript-panel copy row with clear labels; architecture accepted core formatter plus app clipboard command with no storage/API changes; QA defined disabled/active/failure/no-side-effect checks; Developer defined TDD checks and app integration points; user accepted; merge complete.
+- Subagents: BA, UX Designer, System Architect, Acceptance/QA, and Developer outputs summarized here. Architecture/Developer suggested partial inclusion for live copy; BA/product decision for this slice is finalized-only because `Full Transcript` should not spread unstable partial text as trusted content.
+- TDD/BDD evidence: Added core checks for full transcript metadata, inclusion of old and recent final segments, exclusion of partial/live text, and empty/partial-only transcript behavior before wiring the UI action.
+- Open decisions: Whether a future separate `Copy Live Transcript` command should include partial text; whether full-copy should become available for completed sessions/history when durable transcript browsing ships.
+- Handoff notes: `Copy Last 5 Minutes` remains the live-context action and keeps partial `(live)` lines. `Copy Full Transcript` is the safer stable transcript action.
 
 ## Process Guardrail: Mandatory Subagent Gates
 

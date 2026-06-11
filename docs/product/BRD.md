@@ -77,6 +77,8 @@ Enhancement:
 - The first real capture slice must prove local microphone capture with visible `Me` lane activity before real local STT is connected.
 - The UI must not imply that preview transcript text comes from microphone audio until real local STT ships.
 - The app must support Russian as the default transcription language.
+- During an active meeting, the app must let the user copy the full finalized transcript captured so far without stopping recording.
+- Full transcript copy must not present partial/live text as final transcript content.
 - The app must save final transcripts as Markdown.
 - The app must let the user configure the Markdown transcript storage folder.
 - The app must default Markdown transcript storage to `~/Documents/Meeting007/Transcripts/` until the user chooses another local folder.

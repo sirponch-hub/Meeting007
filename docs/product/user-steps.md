@@ -118,12 +118,14 @@ First implementation slice:
 
 - User goal: export everything captured so far without ending the meeting.
 - User action: clicks Copy Full Transcript.
-- App response: copies all available transcript segments.
+- App response: copies all finalized transcript segments available at that moment.
 - Success result: user can share or use the current transcript immediately.
 - Acceptance criteria:
-  - Copy includes stable final segments and can include clearly marked partial segments.
+  - Copy includes stable final segments only.
+  - Partial/live text is not copied as full transcript content until it becomes final.
   - Copy action does not stop or slow recording.
-  - Copied text includes meeting title when available.
+  - Copied text includes app name, meeting title, copy scope, copied time, language, timestamps, and speaker labels.
+  - The action gives quiet native feedback and does not create Markdown, storage, network, telemetry, or cloud side effects.
 
 ## Step 8: Stop Recording
 
