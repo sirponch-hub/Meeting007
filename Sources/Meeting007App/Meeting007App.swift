@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import SwiftUI
 import Meeting007Core
 
@@ -34,7 +35,9 @@ final class RecordingShellViewModel: ObservableObject {
     @Published private(set) var markdownExportFeedbackText: String?
     @Published private(set) var transcriptFolderURL: URL
     @Published private(set) var transcriptStorageFeedbackText: String?
+    @Published private(set) var microphoneStatus: MicrophoneCaptureStatus = .idle
 
+    private let microphoneStatusModel: MicrophoneCaptureStatusModel
     private let controller: RecordingSessionController
     private let transcriptPreviewController: LiveTranscriptPreviewController
     private let recordingStore: any RecordingSessionStore
@@ -47,14 +50,20 @@ final class RecordingShellViewModel: ObservableObject {
     private var transcriptPreviewTimer: Timer?
 
     init(
-        controller: RecordingSessionController = RecordingSessionController(),
+        controller: RecordingSessionController? = nil,
+        microphoneStatusModel: MicrophoneCaptureStatusModel = MicrophoneCaptureStatusModel(),
         transcriptPreviewController: LiveTranscriptPreviewController = LiveTranscriptPreviewController(),
         recordingStore: any RecordingSessionStore = InMemoryRecordingSessionStore(),
         clipboardWriter: any ClipboardWriting = PasteboardClipboardWriter(),
         transcriptFolderSettings: MarkdownTranscriptFolderSettings = MarkdownTranscriptFolderSettings(),
         transcriptFileWriter: (any TranscriptFileWriting)? = nil
     ) {
-        self.controller = controller
+        self.microphoneStatusModel = microphoneStatusModel
+        self.controller = controller ?? RecordingSessionController(
+            captureDriver: MicrophoneRecordingCaptureDriver(
+                microphone: AVAudioEngineMicrophoneCaptureDriver(statusModel: microphoneStatusModel)
+            )
+        )
         self.transcriptPreviewController = transcriptPreviewController
         self.recordingStore = recordingStore
         self.clipboardWriter = clipboardWriter
@@ -62,6 +71,10 @@ final class RecordingShellViewModel: ObservableObject {
         let folderURL = transcriptFolderSettings.folderURL
         self.transcriptFolderURL = folderURL
         self.transcriptFileWriter = transcriptFileWriter ?? LocalMarkdownTranscriptFileWriter(folderURL: folderURL)
+        self.microphoneStatus = microphoneStatusModel.status
+        self.microphoneStatusModel.onChange = { [weak self] status in
+            self?.microphoneStatus = status
+        }
     }
 
     var statusText: String {
@@ -102,6 +115,14 @@ final class RecordingShellViewModel: ObservableObject {
         state.isRecording && !previewSegments.isEmpty
     }
 
+    var canOpenMicrophoneSettings: Bool {
+        if case let .failed(failure) = state {
+            return failure.code == "microphone_permission_denied" || failure.code == "microphone_permission_restricted"
+        }
+
+        return false
+    }
+
     func primaryAction() {
         if state.isRecording {
             stop()
@@ -115,6 +136,7 @@ final class RecordingShellViewModel: ObservableObject {
         copyFeedbackText = nil
         markdownExportFeedbackText = nil
         pendingMarkdownExportSession = nil
+        microphoneStatus = .requestingPermission
         state = .starting
         elapsedText = "00:00"
 
@@ -144,8 +166,19 @@ final class RecordingShellViewModel: ObservableObject {
             previewSegments = frozenSegments
             let nextState = await controller.stopManualRecording()
             apply(nextState)
+            if nextState == .stopped {
+                microphoneStatusModel.update(.idle)
+            }
             await saveCompletedSessionIfNeeded(state: nextState, segments: frozenSegments)
         }
+    }
+
+    func openMicrophonePrivacySettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") else {
+            return
+        }
+
+        NSWorkspace.shared.open(url)
     }
 
     func revealMarkdownFile(for session: CompletedRecordingSession) {
@@ -272,6 +305,11 @@ final class RecordingShellViewModel: ObservableObject {
 
         if case let .failed(failure) = nextState {
             errorMessage = failure.message
+            if failure.code == "microphone_permission_denied" || failure.code == "microphone_permission_restricted" {
+                microphoneStatusModel.update(.blocked)
+            } else if failure.code.hasPrefix("microphone_") {
+                microphoneStatusModel.update(.failed(failure.message))
+            }
         }
 
         if case .failed = nextState {
@@ -407,6 +445,154 @@ struct PasteboardClipboardWriter: ClipboardWriting {
     }
 }
 
+@MainActor
+final class MicrophoneCaptureStatusModel: ObservableObject {
+    @Published private(set) var status: MicrophoneCaptureStatus = .idle
+    var onChange: ((MicrophoneCaptureStatus) -> Void)?
+
+    func update(_ status: MicrophoneCaptureStatus) {
+        self.status = status
+        onChange?(status)
+    }
+}
+
+final class AVAudioEngineMicrophoneCaptureDriver: MicrophoneCaptureDriver, @unchecked Sendable {
+    private let statusModel: MicrophoneCaptureStatusModel
+    private let stateLock = NSLock()
+    private var engine: AVAudioEngine?
+    private var activeSessionID: UUID?
+
+    init(statusModel: MicrophoneCaptureStatusModel) {
+        self.statusModel = statusModel
+    }
+
+    func start(session: RecordingSession, consumer: any AudioChunkConsumer) async throws {
+        await updateStatus(.requestingPermission)
+        let permission = await requestMicrophoneAccess()
+
+        guard permission else {
+            await updateStatus(.blocked)
+            throw RecordingFailure(
+                code: "microphone_permission_denied",
+                message: "Microphone access is off. Turn it on in macOS Settings, then start recording again."
+            )
+        }
+
+        await updateStatus(.starting)
+
+        let nextEngine = AVAudioEngine()
+        let inputNode = nextEngine.inputNode
+        let format = inputNode.outputFormat(forBus: 0)
+
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            await updateStatus(.unavailable("No microphone signal detected. Check your input device or mute state."))
+            throw RecordingFailure(
+                code: "microphone_input_unavailable",
+                message: "No microphone signal detected. Check your input device or mute state."
+            )
+        }
+
+        let startedAt = Date()
+        inputNode.installTap(onBus: 0, bufferSize: 1_024, format: format) { [weak self] buffer, _ in
+            guard let self else {
+                return
+            }
+
+            let duration = Double(buffer.frameLength) / format.sampleRate
+            let level = Self.normalizedLevel(from: buffer)
+            let startedAtOffset = Date().timeIntervalSince(startedAt)
+            let byteCount = Int(buffer.frameLength) * Int(format.channelCount) * MemoryLayout<Float>.size
+            Task {
+                await consumer.receive(CapturedAudioChunk(
+                    sessionID: session.id,
+                    lane: .mic,
+                    startedAt: startedAtOffset,
+                    duration: duration,
+                    sampleRate: format.sampleRate,
+                    channelCount: Int(format.channelCount),
+                    byteCount: byteCount
+                ))
+                await self.updateStatus(level > 0.03 ? .listening(level: level) : .quiet)
+            }
+        }
+
+        do {
+            try nextEngine.start()
+            stateLock.withLock {
+                engine = nextEngine
+                activeSessionID = session.id
+            }
+        } catch {
+            inputNode.removeTap(onBus: 0)
+            nextEngine.stop()
+            await updateStatus(.failed("Microphone capture stopped unexpectedly. Your current transcript is still local."))
+            throw RecordingFailure(
+                code: "microphone_capture_start_failed",
+                message: "Microphone capture stopped unexpectedly. Your current transcript is still local."
+            )
+        }
+    }
+
+    func stop(sessionID: UUID) async throws {
+        let stopState = stateLock.withLock {
+            let shouldStop = activeSessionID == sessionID
+            let engineToStop = engine
+            engine = nil
+            activeSessionID = nil
+            return (shouldStop, engineToStop)
+        }
+
+        guard stopState.0 else {
+            await updateStatus(.idle)
+            return
+        }
+
+        stopState.1?.inputNode.removeTap(onBus: 0)
+        stopState.1?.stop()
+        await updateStatus(.idle)
+    }
+
+    private func requestMicrophoneAccess() async -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            return true
+        case .notDetermined:
+            return await AVCaptureDevice.requestAccess(for: .audio)
+        case .denied, .restricted:
+            return false
+        @unknown default:
+            return false
+        }
+    }
+
+    @MainActor
+    private func updateStatus(_ status: MicrophoneCaptureStatus) {
+        statusModel.update(status)
+    }
+
+    private static func normalizedLevel(from buffer: AVAudioPCMBuffer) -> Double {
+        guard let channelData = buffer.floatChannelData, buffer.frameLength > 0 else {
+            return 0
+        }
+
+        let channelCount = max(Int(buffer.format.channelCount), 1)
+        let frameLength = Int(buffer.frameLength)
+        var sum: Float = 0
+
+        for channel in 0..<channelCount {
+            let samples = channelData[channel]
+            for frame in 0..<frameLength {
+                let sample = samples[frame]
+                sum += sample * sample
+            }
+        }
+
+        let meanSquare = sum / Float(frameLength * channelCount)
+        let rms = sqrt(meanSquare)
+        return min(max(Double(rms) * 12, 0), 1)
+    }
+}
+
 struct RecordingShellView: View {
     @ObservedObject var viewModel: RecordingShellViewModel
     @State private var selectedSection: ShellSection = .recording
@@ -451,7 +637,10 @@ struct RecordingShellView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     quickNoteDisclosure
-                    errorMessage
+                    errorMessage(
+                        canOpenMicrophoneSettings: viewModel.canOpenMicrophoneSettings,
+                        onOpenMicrophoneSettings: viewModel.openMicrophonePrivacySettings
+                    )
                     if let lastCompletedSession = viewModel.lastCompletedSession {
                         transcriptPanel
                         CompletedSessionSummary(
@@ -533,13 +722,21 @@ struct RecordingShellView: View {
     }
 
     @ViewBuilder
-    private var errorMessage: some View {
+    private func errorMessage(
+        canOpenMicrophoneSettings: Bool,
+        onOpenMicrophoneSettings: @escaping () -> Void
+    ) -> some View {
         if let errorMessage = viewModel.errorMessage {
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(.red)
                 Text(errorMessage)
                     .font(.callout)
+                Spacer()
+                if canOpenMicrophoneSettings {
+                    Button("Open Privacy Settings", action: onOpenMicrophoneSettings)
+                        .buttonStyle(.bordered)
+                }
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -551,6 +748,7 @@ struct RecordingShellView: View {
     private var transcriptPanel: some View {
         TranscriptPanel(
             state: viewModel.state,
+            microphoneStatus: viewModel.microphoneStatus,
             hasStartedPreview: viewModel.hasStartedPreview,
             segments: viewModel.previewSegments,
             canCopyRecentContext: viewModel.canCopyRecentContext,
@@ -974,6 +1172,7 @@ struct RecentRecordingTreeRow: View {
 
 struct TranscriptPanel: View {
     let state: RecordingState
+    let microphoneStatus: MicrophoneCaptureStatus
     let hasStartedPreview: Bool
     let segments: [TranscriptSegment]
     let canCopyRecentContext: Bool
@@ -1004,6 +1203,8 @@ struct TranscriptPanel: View {
                         .font(.callout.weight(.medium))
                         .foregroundStyle(.secondary)
                 }
+
+                MicrophoneLaneIndicator(status: microphoneStatus, isRecording: state.isRecording)
 
                 if shouldShowPreview {
                     TranscriptPreviewBanner(isRecording: state.isRecording)
@@ -1048,6 +1249,71 @@ struct TranscriptEmptyState: View {
                 .font(.headline)
             Text("Start recording to see a live transcript preview. Russian transcription is the primary path for v1.")
                 .foregroundStyle(.secondary)
+        }
+    }
+}
+
+struct MicrophoneLaneIndicator: View {
+    let status: MicrophoneCaptureStatus
+    let isRecording: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: iconName)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 18)
+
+            Text(status.userFacingLabel)
+                .font(.callout.weight(.semibold))
+
+            if isRecording {
+                GeometryReader { proxy in
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(Color.secondary.opacity(0.14))
+                        Capsule()
+                            .fill(tint.opacity(0.74))
+                            .frame(width: max(8, proxy.size.width * status.level))
+                    }
+                }
+                .frame(width: 72, height: 5)
+                .accessibilityHidden(true)
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Microphone lane \(status.userFacingLabel)")
+    }
+
+    private var iconName: String {
+        switch status {
+        case .blocked, .unavailable, .failed:
+            return "mic.slash.fill"
+        case .requestingPermission, .starting:
+            return "mic.badge.plus"
+        case .listening, .quiet:
+            return "mic.fill"
+        case .idle:
+            return "mic"
+        }
+    }
+
+    private var tint: Color {
+        switch status {
+        case .listening:
+            return .green
+        case .blocked, .unavailable, .failed:
+            return .red
+        case .requestingPermission, .starting:
+            return .accentColor
+        case .quiet, .idle:
+            return .secondary
         }
     }
 }

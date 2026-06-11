@@ -18,6 +18,8 @@ Required coverage:
 - Markdown export.
 - Markdown file writer path, filename, folder creation, temp-file cleanup, and local-only scope.
 - Markdown transcript folder setting, default folder behavior, selected-folder persistence, write-access validation, and recoverable unavailable-folder errors.
+- Microphone recording lifecycle with fake capture: Start opens one mic lane, Stop closes it, late chunks are rejected, chunk metadata remains session/lane/timing aware, and microphone start failures surface stable user-facing errors.
+- Runtime-only audio behavior: fake mic chunks do not create raw audio files and Markdown export does not reference audio artifacts.
 - Completed-session runtime history after Stop.
 - In-memory history deduplication and newest-first ordering.
 - Google Calendar event mapping from title/topic, time, and participants into local meeting metadata using mocked provider fixtures.
@@ -52,6 +54,12 @@ Use deterministic fixtures:
 - Google Calendar connection flow.
 - Notification permission prompt when meeting reminders are implemented.
 - Manual start/stop recording.
+- Start recording from fresh microphone permission state and verify macOS asks for access.
+- Grant microphone access and verify the mic lane shows activity while speaking.
+- Deny microphone access and verify the app shows a recoverable blocked state without starting fake transcript preview.
+- Stop recording and verify mic activity stops.
+- Start/Stop recording multiple times and verify no duplicate mic activity indicators or stale recording states remain.
+- Verify no `.wav`, `.caf`, `.m4a`, `.pcm`, `.aiff`, `.flac`, or `.mp3` artifacts are created in the transcript folder or app-specific Meeting007 temp/output folders by the mic capture slice.
 - Stop recording and verify the completed session appears in recent recordings for the current app run.
 - Start/stop a second recording and verify recent recordings stay newest first.
 - Relaunch the app and verify prototype recent recordings are not presented as durable history until persistence ships.

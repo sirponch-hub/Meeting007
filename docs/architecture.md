@@ -39,6 +39,15 @@ The capture layer keeps audio lanes separate:
 
 The app should avoid mixing these lanes before transcription unless a fallback path requires it. Keeping lanes separate improves attribution and preserves future diarization options.
 
+Current implemented microphone boundary:
+
+- `RecordingCaptureDriver` remains the Start/Stop lifecycle boundary used by the app.
+- `MicrophoneRecordingCaptureDriver` composes a microphone driver with a runtime-only audio chunk consumer.
+- `CapturedAudioChunk` carries meeting ID, lane, timing, sample rate, channel count, and byte count metadata for future local STT.
+- `RuntimeOnlyAudioChunkConsumer` accepts chunks only while the session is active and clears them on Stop.
+- `AVAudioEngineMicrophoneCaptureDriver` lives in the macOS app edge, requests microphone access on Start, starts `AVAudioEngine`, emits in-memory mic chunk metadata, and updates the UI with a compact mic lane status.
+- The first mic slice does not persist raw audio, does not transcribe real audio, and does not add system audio capture.
+
 ## Transcription Pipeline
 
 The STT engine is behind a protocol boundary:

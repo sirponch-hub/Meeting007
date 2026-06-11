@@ -39,6 +39,14 @@ V1 must make audio retention explicit before implementation:
 
 The default must be chosen by product decision before raw audio persistence ships. Until then, implementation should avoid persistent raw audio by default.
 
+Current microphone capture slice:
+
+- Microphone capture starts only after the user presses Start.
+- The app requests macOS microphone access only when recording is requested.
+- Captured audio stays in process memory as runtime chunks for future local STT.
+- Runtime chunks are cleared on Stop and are not written to Markdown, SQLite, logs, REST, MCP, telemetry, cloud storage, or raw audio files.
+- The visible transcript remains marked as local preview until real local STT ships.
+
 ## Runtime Transcript History
 
 Prototype completed-session history may keep transcript preview text in memory during the current app process. This is acceptable only when:

@@ -49,6 +49,21 @@ Remind the user to consider extra skills or MCP/connectors when these moments ar
 
 ## Current Workstreams
 
+## Real Microphone Capture Lane
+
+- Status: Ready for Review
+- Owner: Codex + BA/UX/Architecture/QA/Developer agents
+- User outcome: User can press Start and know Meeting007 is really listening to the Mac microphone as the `Me` lane, while still understanding that visible transcript text is preview-only until local STT ships.
+- Scope: Manual Start requests microphone permission when needed, starts an `AVAudioEngine` microphone lane, shows compact `Me` lane status, stops and clears runtime audio on Stop, exposes recoverable permission-denied state, and keeps audio runtime-only.
+- Out of scope: Real STT, system audio capture, device picker, raw audio retention, SQLite, REST/MCP, hotkeys/menu bar, cloud fallback, diarization, and calendar-triggered capture.
+- Docs touched: `docs/architecture.md`, `docs/security-privacy.md`, `docs/testing.md`, `docs/workstreams.md`.
+- Verification: `swift run Meeting007CoreChecks` passed before app wiring; `swift build --product Meeting007App` passed after app wiring. Final verification pending after documentation updates.
+- Gates: BA defined user outcome and exclusions; UX accepted compact `Me · Listening/Quiet/Blocked` lane and denied-permission recovery; architecture accepted `RecordingCaptureDriver` as the integration boundary and AVFoundation at the app edge; QA defined lifecycle, permission, no-persistence, and manual Apple Silicon checks; Developer defined TDD slice and fake mic checks; implementation complete; user acceptance pending; merge pending.
+- Subagents: BA, UX Designer, System Architect/macOS Audio Specialist, Acceptance/QA, and Developer outputs summarized in this entry. Key shared decision: this slice proves live mic capture without implying real transcription.
+- TDD/BDD evidence: Added fake microphone lifecycle checks in `Meeting007CoreChecks` before platform driver verification: start opens mic lane, stop closes it, chunks carry `.mic` metadata, permission failure surfaces stable error, and Markdown export does not create/reference audio artifacts.
+- Open decisions: Whether to add input-device selection in Settings; whether future raw audio retention defaults to keep-local-for-correction or auto-delete after transcript finalization; whether first real STT slice consumes PCM buffers directly or through a VAD/chunker actor.
+- Handoff notes: The transcript panel still uses the existing mock Russian preview. Do not connect fake transcript progress to mic level; that would make users think real audio is being transcribed.
+
 ## Process Guardrail: Mandatory Subagent Gates
 
 - Status: Ready for Review

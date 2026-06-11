@@ -23,6 +23,11 @@ struct Meeting007CoreChecks {
         await checkRepeatedStartDoesNotCreateDuplicateSession()
         await checkStopWhileIdleIsSafe()
         await checkStartFailureReturnsStableErrorState()
+        await checkRecordingStartStartsMicrophoneLane()
+        await checkRecordingStopStopsMicrophoneLane()
+        await checkMicrophoneChunksCarrySessionAndLane()
+        await checkMicrophoneStartFailureReturnsStableError()
+        await checkRuntimeAudioChunksDoNotPersistIntoMarkdown()
         await checkDefaultRecordingLanguageIsRussian()
         await checkLiveTranscriptPreviewEmitsRussianSegments()
         await checkLiveTranscriptPreviewReplacesPartialWithFinal()
@@ -440,6 +445,132 @@ struct Meeting007CoreChecks {
         )
     }
 
+    private static func checkRecordingStartStartsMicrophoneLane() async {
+        let microphone = FakeMicrophoneCaptureDriver()
+        let controller = RecordingSessionController(
+            captureDriver: MicrophoneRecordingCaptureDriver(microphone: microphone)
+        )
+
+        let state = await controller.startManualRecording(title: "Mic")
+        let session = await controller.currentSession()
+        let startedSessionIDs = await microphone.startedSessionIDs()
+
+        require(state == .recording, "Manual start must enter recording after microphone capture starts.")
+        require(startedSessionIDs == [session?.id], "Manual start must start exactly one microphone lane for the active session.")
+    }
+
+    private static func checkRecordingStopStopsMicrophoneLane() async {
+        let microphone = FakeMicrophoneCaptureDriver()
+        let consumer = RuntimeOnlyAudioChunkConsumer()
+        let controller = RecordingSessionController(
+            captureDriver: MicrophoneRecordingCaptureDriver(microphone: microphone, consumer: consumer)
+        )
+
+        _ = await controller.startManualRecording(title: "Mic stop")
+        guard let session = await controller.currentSession() else {
+            require(false, "Mic stop test must have an active session.")
+            return
+        }
+
+        await microphone.emitTestChunk(sessionID: session.id)
+        _ = await controller.stopManualRecording()
+        await microphone.emitTestChunk(sessionID: session.id, startedAt: 2)
+
+        let stoppedSessionIDs = await microphone.stoppedSessionIDs()
+        let chunks = await consumer.capturedChunks()
+
+        require(stoppedSessionIDs == [session.id], "Manual stop must stop the microphone lane for the same session.")
+        require(chunks.isEmpty, "Runtime audio chunks must be cleared and rejected after stop.")
+    }
+
+    private static func checkMicrophoneChunksCarrySessionAndLane() async {
+        let microphone = FakeMicrophoneCaptureDriver()
+        let consumer = RuntimeOnlyAudioChunkConsumer()
+        let controller = RecordingSessionController(
+            captureDriver: MicrophoneRecordingCaptureDriver(microphone: microphone, consumer: consumer)
+        )
+
+        _ = await controller.startManualRecording(title: "Mic chunks")
+        guard let session = await controller.currentSession() else {
+            require(false, "Mic chunk test must have an active session.")
+            return
+        }
+
+        await microphone.emitTestChunk(sessionID: session.id, startedAt: 0)
+        await microphone.emitTestChunk(sessionID: session.id, startedAt: 0.25)
+
+        let chunks = await consumer.capturedChunks()
+
+        require(chunks.count == 2, "Microphone chunks must reach the in-memory runtime consumer.")
+        require(chunks.allSatisfy { $0.sessionID == session.id }, "Microphone chunks must carry the active meeting ID.")
+        require(chunks.allSatisfy { $0.lane == .mic }, "Microphone chunks must stay on the mic lane.")
+        require(chunks.map(\.startedAt) == chunks.map(\.startedAt).sorted(), "Microphone chunks must keep monotonic timestamps.")
+        require(chunks.allSatisfy { $0.duration > 0 }, "Microphone chunks must include nonzero duration.")
+        require(chunks.allSatisfy { $0.sampleRate > 0 && $0.channelCount > 0 }, "Microphone chunks must include usable audio format metadata.")
+    }
+
+    private static func checkMicrophoneStartFailureReturnsStableError() async {
+        let microphone = FakeMicrophoneCaptureDriver(
+            startError: RecordingFailure(
+                code: "microphone_permission_denied",
+                message: "Microphone access is off. Turn it on in macOS Settings, then start recording again."
+            )
+        )
+        let controller = RecordingSessionController(
+            captureDriver: MicrophoneRecordingCaptureDriver(microphone: microphone)
+        )
+
+        let state = await controller.startManualRecording(title: "Blocked mic")
+
+        require(
+            state == .failed(RecordingFailure(
+                code: "microphone_permission_denied",
+                message: "Microphone access is off. Turn it on in macOS Settings, then start recording again."
+            )),
+            "Microphone permission failure must surface as a stable recording failure."
+        )
+    }
+
+    private static func checkRuntimeAudioChunksDoNotPersistIntoMarkdown() async {
+        let meetingID = UUID()
+        var session = RecordingSession(id: meetingID, title: "Runtime Audio")
+        session.markStarted(at: Date(timeIntervalSince1970: 0))
+        session.markEnded(at: Date(timeIntervalSince1970: 30))
+        let transcript = MeetingTranscript(meetingID: meetingID, segments: [
+            TranscriptSegment(
+                meetingID: meetingID,
+                lane: .me,
+                state: .final,
+                startTime: 0,
+                endTime: 2,
+                text: "Проверка без сохранения аудио."
+            )
+        ])
+        guard let completedSession = CompletedRecordingSession(session: session, transcript: transcript) else {
+            require(false, "Runtime audio Markdown test must create a completed session.")
+            return
+        }
+
+        let exportFolder = temporaryExportFolder()
+        let writer = LocalMarkdownTranscriptFileWriter(folderURL: exportFolder)
+
+        do {
+            let result = try await writer.write(completedSession)
+            let folderContents = try FileManager.default.contentsOfDirectory(
+                at: exportFolder,
+                includingPropertiesForKeys: nil
+            )
+            let audioExtensions = Set(["wav", "caf", "m4a", "pcm", "aiff", "flac", "mp3"])
+
+            require(folderContents.allSatisfy { !audioExtensions.contains($0.pathExtension.lowercased()) }, "Markdown export must not create raw audio artifacts.")
+            require(!result.markdown.contains(".wav"), "Markdown must not reference audio filenames.")
+            require(!result.markdown.contains("sampleRate"), "Markdown must not dump audio metadata.")
+            require(!result.markdown.contains("byteCount"), "Markdown must not dump audio payload metadata.")
+        } catch {
+            require(false, "Runtime audio Markdown export must not throw: \(error)")
+        }
+    }
+
     private static func checkDefaultRecordingLanguageIsRussian() async {
         let controller = RecordingSessionController()
 
@@ -774,4 +905,49 @@ private struct FailingRecordingCaptureDriver: RecordingCaptureDriver {
     }
 
     func stop(sessionID: UUID) async throws {}
+}
+
+private actor FakeMicrophoneCaptureDriver: MicrophoneCaptureDriver {
+    private let startError: Error?
+    private var starts: [UUID] = []
+    private var stops: [UUID] = []
+    private var consumer: (any AudioChunkConsumer)?
+
+    init(startError: Error? = nil) {
+        self.startError = startError
+    }
+
+    func start(session: RecordingSession, consumer: any AudioChunkConsumer) async throws {
+        if let startError {
+            throw startError
+        }
+
+        starts.append(session.id)
+        self.consumer = consumer
+    }
+
+    func stop(sessionID: UUID) async throws {
+        stops.append(sessionID)
+        consumer = nil
+    }
+
+    func emitTestChunk(sessionID: UUID, startedAt: TimeInterval = 0) async {
+        await consumer?.receive(CapturedAudioChunk(
+            sessionID: sessionID,
+            lane: .mic,
+            startedAt: startedAt,
+            duration: 0.25,
+            sampleRate: 48_000,
+            channelCount: 1,
+            byteCount: 1_024
+        ))
+    }
+
+    func startedSessionIDs() -> [UUID] {
+        starts
+    }
+
+    func stoppedSessionIDs() -> [UUID] {
+        stops
+    }
 }
