@@ -16,6 +16,7 @@ Required behavior:
 - Do not start coding until BA requirements, UX impact when relevant, architecture impact, and acceptance scenarios are available.
 - Code-changing work always requires a Developer subagent in addition to BA/UX/Architecture/QA gates.
 - UI-affecting work always requires UX Designer and Acceptance/QA subagents.
+- macOS/SwiftUI/AppKit work must apply the `build-macos-apps` plugin skills. If the skills are not active in the current session, use the installed local plugin files as the fallback source of truth.
 - Storage, privacy, API/MCP, audio, STT, performance, CI/build, or documentation-sensitive work requires the matching specialist subagent listed in this workflow.
 - If subagent tooling is unavailable, mark the workstream blocked and ask the user whether to proceed without the required gate.
 - Record subagent outputs or a concise summary of them in `docs/workstreams.md`, `docs/design/*`, `docs/product/*`, or the PR notes before user acceptance.

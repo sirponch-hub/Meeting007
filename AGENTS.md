@@ -22,6 +22,8 @@ These rules apply to all AI-assisted work in this repository. Reusable role prom
 - Feature work must use the specialist subagents defined in `docs/process/agent-workflow.md` before implementation. Do not self-approve BA, UX, architecture, QA, or specialist gates when a matching subagent can be used.
 - Code changes must use the Developer subagent before implementation. The Developer subagent must receive the approved requirements, architecture notes, acceptance criteria, and test expectations.
 - Code changes must follow TDD/BDD: add or update an automated check before or alongside implementation. If the change cannot be automated yet, document the missing harness, add a manual acceptance checklist before coding, and keep the branch out of `main` unless the user explicitly accepts the test gap.
+- macOS development must use the `build-macos-apps` plugin skills when available: `swiftui-patterns`, `liquid-glass`, `swiftpm-macos`, `build-run-debug`, `appkit-interop`, `signing-entitlements`, `test-triage`, and `view-refactor`.
+- If the `build-macos-apps` skills are installed locally but not active as callable skills in the session, read and apply their local `SKILL.md` files before macOS UI, build, signing, packaging, or AppKit changes.
 - Specialist review is required when work affects audio capture, local STT, privacy/security, CI/build, performance, QA automation, or user-facing documentation.
 - Run the relevant verification command before handing work back. If checks cannot run, state why and mark the work as not ready for `main`.
 - Do not commit generated build outputs, audio recordings, model files, secrets, tokens, local databases, or user transcripts.
