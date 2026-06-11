@@ -64,6 +64,15 @@ First implementation slice:
 - The app does not create audio files, transcript files, or network calls.
 - The purpose is to validate the manual Start/Stop workflow and state model before real capture is added.
 
+Real microphone capture slice:
+
+- Pressing Start requests macOS microphone permission when needed.
+- If permission is granted, the app starts a real local microphone lane for `Me`.
+- The transcript panel shows compact microphone lane status such as `Me · Listening`, `Me · Quiet`, or `Me · Microphone blocked`.
+- Pressing Stop stops the microphone lane and clears runtime audio chunks.
+- The visible transcript remains marked as preview-only until real local STT ships.
+- This slice does not capture system audio, does not persist raw audio, does not run real STT, and does not call any network service.
+
 ## Step 5: See Live Russian Transcript
 
 - User goal: read what was just said while the meeting is still happening.
@@ -81,7 +90,7 @@ Placeholder implementation slice:
 - During recording, the app shows static local Russian mock segments that demonstrate the future live transcript experience.
 - Mock segments include `Me` and `Others` labels plus partial/final states.
 - The UI clearly says this is a preview, not real audio transcription.
-- The app does not capture audio, run STT, save transcript files, or call any network service for this slice.
+- The preview text does not depend on microphone audio until the real local STT slice is implemented.
 
 ## Step 6: Copy Recent Context During Meeting
 

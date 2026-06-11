@@ -67,12 +67,51 @@ public protocol RecordingCaptureDriver: Sendable {
     func stop(sessionID: UUID) async throws
 }
 
+public protocol MicrophoneCaptureDriver: Sendable {
+    func start(session: RecordingSession, consumer: any AudioChunkConsumer) async throws
+    func stop(sessionID: UUID) async throws
+}
+
 public struct NoopRecordingCaptureDriver: RecordingCaptureDriver {
     public init() {}
 
     public func start(session: RecordingSession) async throws {}
 
     public func stop(sessionID: UUID) async throws {}
+}
+
+public struct MicrophoneRecordingCaptureDriver: RecordingCaptureDriver {
+    private let microphone: any MicrophoneCaptureDriver
+    private let consumer: RuntimeOnlyAudioChunkConsumer
+
+    public init(
+        microphone: any MicrophoneCaptureDriver,
+        consumer: RuntimeOnlyAudioChunkConsumer = RuntimeOnlyAudioChunkConsumer()
+    ) {
+        self.microphone = microphone
+        self.consumer = consumer
+    }
+
+    public func start(session: RecordingSession) async throws {
+        await consumer.begin(sessionID: session.id)
+
+        do {
+            try await microphone.start(session: session, consumer: consumer)
+        } catch {
+            await consumer.end(sessionID: session.id)
+            throw error
+        }
+    }
+
+    public func stop(sessionID: UUID) async throws {
+        do {
+            try await microphone.stop(sessionID: sessionID)
+            await consumer.end(sessionID: sessionID)
+        } catch {
+            await consumer.end(sessionID: sessionID)
+            throw error
+        }
+    }
 }
 
 public actor RecordingSessionController {

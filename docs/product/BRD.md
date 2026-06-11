@@ -74,6 +74,8 @@ Enhancement:
 - The app must capture microphone and system audio without a bot participant.
 - The app must keep microphone and system audio as separate lanes.
 - The app must label local microphone speech as `Me` and remote/system audio as `Others` in v1.
+- The first real capture slice must prove local microphone capture with visible `Me` lane activity before real local STT is connected.
+- The UI must not imply that preview transcript text comes from microphone audio until real local STT ships.
 - The app must support Russian as the default transcription language.
 - The app must save final transcripts as Markdown.
 - The app must let the user configure the Markdown transcript storage folder.

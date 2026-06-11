@@ -31,7 +31,16 @@ let package = Package(
         ),
         .executableTarget(
             name: "Meeting007App",
-            dependencies: ["Meeting007Core"]
+            dependencies: ["Meeting007Core"],
+            exclude: ["Info.plist"],
+            linkerSettings: [
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", "Sources/Meeting007App/Info.plist"
+                ])
+            ]
         )
     ]
 )
