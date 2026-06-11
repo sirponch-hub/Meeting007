@@ -23,6 +23,7 @@ Required coverage:
 - VAD behavior: silence-only chunks are suppressed, speech-positive chunks create `SpeechChunk` utterances, short pauses stay inside one utterance, long silence separates utterances, and Stop flushes open speech deterministically.
 - Local STT pipeline behavior: Russian default configuration, `SpeechChunk` input, mic-to-`Me` lane mapping, partial-to-final updates with stable segment identity, stopped-session chunk rejection, missing-model recoverable state, and exportability of final STT segments.
 - Local STT model manager behavior: pinned Russian model policy, missing/invalid/downloading/download-failed recoverable states, ready-model pass-through, explicit prepared-artifact install boundary, and no automatic model download from core checks.
+- WhisperKit adapter behavior: isolated SwiftPM adapter target compiles against the real `WhisperKit` product, defaults to Russian, accepts only normalized `SpeechChunk` input, returns stable missing-model state without automatic download, maps engine output to transcript segments, and preserves fake STT checks.
 - Completed-session runtime history after Stop.
 - In-memory history deduplication and newest-first ordering.
 - Google Calendar event mapping from title/topic, time, and participants into local meeting metadata using mocked provider fixtures.
@@ -36,6 +37,8 @@ Use deterministic fixtures:
 - Synthetic audio chunks for mic and system lanes.
 - Synthetic PCM frames for VAD and sample-clock timing.
 - Fake local STT engine returning known partial and final segments.
+- Fake WhisperKit transcription engine for adapter contract checks without model files.
+- Optional local WhisperKit model path for manual spike proof; ordinary checks must not require downloading or committing model files.
 - Temporary SQLite database.
 - Temporary Markdown output folder.
 - Fake transcript-folder settings store.

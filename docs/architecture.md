@@ -70,7 +70,10 @@ Current implemented STT boundary:
 - `WhisperModelPolicy.defaultRussian` pins `large-v3-v20240930_626MB` as the production Russian model candidate and keeps `tiny` debug-only.
 - `LocalSTTModelManaging` owns model readiness checks without downloading or uploading anything.
 - `ModelManagedSpeechTranscriber` blocks transcription when the pinned model is missing, invalid, downloading, or failed, and passes through to the current transcriber only when the model is ready.
-- The app Settings surface shows Russian model status and artifact-only trust copy. Real WhisperKit model loading and consented model download are still separate future slices.
+- `Meeting007WhisperKit` is an isolated adapter target that depends on the upstream `argmax-oss-swift` Swift package product `WhisperKit` while keeping `Meeting007Core` dependency-light and fast to test.
+- `WhisperKitSpeechTranscriber` compiles behind the same `SpeechTranscribing` protocol and accepts `SpeechChunk` input only; it does not know about `AVAudioEngine`, VAD internals, Markdown, SQLite, REST, or MCP.
+- The WhisperKit adapter defaults to Russian, requires model readiness before transcribing, and deliberately does not initiate automatic model download.
+- The app Settings surface shows Russian model status and artifact-only trust copy. Real WhisperKit runtime enablement in the app flow and consented model download are still separate future slices.
 
 ## Storage
 
