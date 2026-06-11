@@ -29,6 +29,13 @@ struct Meeting007CoreChecks {
         await checkRecordingStopStopsMicrophoneLane()
         await checkMicrophoneChunksCarrySessionAndLane()
         await checkMicrophoneStartFailureReturnsStableError()
+        checkRuntimeAudioNormalizerDownmixesAndResamplesToMono16k()
+        await checkRuntimeAudioConsumerAcceptsOnlyActiveSampleBearingChunks()
+        checkVADSuppressesQuietFrames()
+        checkVADEmitsSpeechChunkForSpeechFrames()
+        checkVADKeepsShortPauseInsideOneUtterance()
+        checkVADSeparatesSpeechAfterLongSilence()
+        checkVADFlushFinalizesOpenSpeechOnStop()
         await checkRuntimeAudioChunksDoNotPersistIntoMarkdown()
         await checkLocalSTTDefaultsToRussian()
         checkWhisperModelPolicyDefaultsToRussianPinnedModel()
@@ -595,6 +602,7 @@ struct Meeting007CoreChecks {
         require(chunks.map(\.startedAt) == chunks.map(\.startedAt).sorted(), "Microphone chunks must keep monotonic timestamps.")
         require(chunks.allSatisfy { $0.duration > 0 }, "Microphone chunks must include nonzero duration.")
         require(chunks.allSatisfy { $0.sampleRate > 0 && $0.channelCount > 0 }, "Microphone chunks must include usable audio format metadata.")
+        require(chunks.allSatisfy { !$0.samples.samples.isEmpty }, "Microphone chunks must carry in-memory PCM samples for local STT.")
     }
 
     private static func checkMicrophoneStartFailureReturnsStableError() async {
@@ -617,6 +625,118 @@ struct Meeting007CoreChecks {
             )),
             "Microphone permission failure must surface as a stable recording failure."
         )
+    }
+
+    private static func checkRuntimeAudioNormalizerDownmixesAndResamplesToMono16k() {
+        let stereo48kSamples: [Float] = [
+            1, -1,
+            0.5, -0.5,
+            0.25, -0.25,
+            0.75, -0.25,
+            1, 0
+        ]
+
+        let normalized = RuntimeAudioFrameNormalizer.normalizedMonoSamples(
+            stereo48kSamples,
+            sourceSampleRate: 48_000,
+            sourceChannelCount: 2
+        )
+
+        require(normalized.sampleRate == 16_000, "Runtime PCM must be normalized to the 16 kHz STT target.")
+        require(normalized.channelCount == 1, "Runtime PCM must be downmixed to mono for VAD/STT.")
+        require(!normalized.samples.isEmpty, "Runtime PCM normalization must preserve sample payload in memory.")
+        require(normalized.byteCount == normalized.samples.count * MemoryLayout<Float>.size, "Runtime PCM byte count must match Float sample payload.")
+    }
+
+    private static func checkRuntimeAudioConsumerAcceptsOnlyActiveSampleBearingChunks() async {
+        let activeSessionID = UUID()
+        let wrongSessionID = UUID()
+        let consumer = RuntimeOnlyAudioChunkConsumer()
+
+        await consumer.begin(sessionID: activeSessionID)
+        await consumer.receive(makeCapturedAudioChunk(sessionID: activeSessionID, startedAt: 0, amplitude: 0.25))
+        await consumer.receive(makeCapturedAudioChunk(sessionID: wrongSessionID, startedAt: 0.25, amplitude: 0.25))
+
+        let activeChunks = await consumer.capturedChunks()
+        require(activeChunks.count == 1, "Runtime consumer must reject sample-bearing chunks for other sessions.")
+        require(activeChunks.first?.samples.samples.isEmpty == false, "Runtime consumer must keep PCM samples only while the session is active.")
+
+        await consumer.end(sessionID: activeSessionID)
+        await consumer.receive(makeCapturedAudioChunk(sessionID: activeSessionID, startedAt: 0.5, amplitude: 0.25))
+
+        let stoppedChunks = await consumer.capturedChunks()
+        require(stoppedChunks.isEmpty, "Runtime consumer must clear PCM samples on Stop and reject late chunks.")
+    }
+
+    private static func checkVADSuppressesQuietFrames() {
+        var vad = VADSpeechChunker(configuration: testVADConfiguration())
+        let sessionID = UUID()
+
+        vad.begin(sessionID: sessionID)
+        let chunks = vad.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0, amplitude: 0.001))
+
+        require(chunks.isEmpty, "VAD must not send quiet-only PCM to STT.")
+    }
+
+    private static func checkVADEmitsSpeechChunkForSpeechFrames() {
+        var vad = VADSpeechChunker(configuration: testVADConfiguration())
+        let sessionID = UUID()
+
+        vad.begin(sessionID: sessionID)
+        _ = vad.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0, amplitude: 0.2))
+        let chunks = vad.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0.2, amplitude: 0.001))
+
+        require(chunks.count == 1, "VAD must emit one speech chunk after speech is bounded by silence.")
+        require(chunks.first?.sessionID == sessionID, "Speech chunk must keep meeting identity.")
+        require(chunks.first?.lane == .mic, "Speech chunk must preserve mic lane.")
+        require(chunks.first?.startedAt == 0, "Speech chunk must keep sample-clock start timing.")
+        require(chunks.first?.duration == 0.2, "Speech chunk duration must exclude trailing final silence.")
+        require(chunks.first?.sampleRate == 16_000, "Speech chunk must use normalized 16 kHz audio.")
+        require(chunks.first?.samples.isEmpty == false, "Speech chunk must carry PCM samples for local STT.")
+    }
+
+    private static func checkVADKeepsShortPauseInsideOneUtterance() {
+        var vad = VADSpeechChunker(configuration: testVADConfiguration())
+        let sessionID = UUID()
+
+        vad.begin(sessionID: sessionID)
+        _ = vad.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0, amplitude: 0.2))
+        let shortPause = vad.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0.2, amplitude: 0.001, duration: 0.05))
+        _ = vad.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0.25, amplitude: 0.2))
+        let final = vad.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0.45, amplitude: 0.001))
+
+        require(shortPause.isEmpty, "VAD must keep a short pause inside the same utterance.")
+        require(final.count == 1, "VAD must finalize one utterance after the final trailing silence.")
+        require(final.first?.duration == 0.45, "Short pause must not split the utterance timing.")
+    }
+
+    private static func checkVADSeparatesSpeechAfterLongSilence() {
+        var vad = VADSpeechChunker(configuration: testVADConfiguration())
+        let sessionID = UUID()
+
+        vad.begin(sessionID: sessionID)
+        _ = vad.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0, amplitude: 0.2))
+        let first = vad.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0.2, amplitude: 0.001))
+        _ = vad.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0.4, amplitude: 0.2))
+        let second = vad.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0.6, amplitude: 0.001))
+
+        require(first.count == 1, "VAD must close the first utterance after long silence.")
+        require(second.count == 1, "VAD must create a second utterance after speech resumes.")
+        require(second.first?.startedAt == 0.4, "Second utterance must start at the resumed speech timing.")
+    }
+
+    private static func checkVADFlushFinalizesOpenSpeechOnStop() {
+        var vad = VADSpeechChunker(configuration: testVADConfiguration())
+        let sessionID = UUID()
+
+        vad.begin(sessionID: sessionID)
+        _ = vad.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0, amplitude: 0.2))
+        let flushed = vad.end(sessionID: sessionID)
+        let late = vad.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0.2, amplitude: 0.2))
+
+        require(flushed.count == 1, "Stop must flush active speech so the last spoken words are not lost.")
+        require(flushed.first?.isFinalInUtterance == true, "Stop-flushed speech chunks must be final utterance boundaries.")
+        require(late.isEmpty, "VAD must reject late PCM after Stop.")
     }
 
     private static func checkRuntimeAudioChunksDoNotPersistIntoMarkdown() async {
@@ -686,14 +806,10 @@ struct Meeting007CoreChecks {
         let sessionID = UUID()
 
         let start = await pipeline.start(STTSessionConfig(sessionID: sessionID))
-        let segments = await pipeline.receive(CapturedAudioChunk(
+        let segments = await pipeline.receive(makeSpeechChunk(
             sessionID: sessionID,
-            lane: .mic,
             startedAt: 0,
-            duration: 1,
-            sampleRate: 16_000,
-            channelCount: 1,
-            byteCount: 1_024
+            duration: 1
         ))
         let requestedPolicies = await manager.requestedPolicies()
 
@@ -731,14 +847,10 @@ struct Meeting007CoreChecks {
         let sessionID = UUID()
 
         let start = await pipeline.start(STTSessionConfig(sessionID: sessionID))
-        let segments = await pipeline.receive(CapturedAudioChunk(
+        let segments = await pipeline.receive(makeSpeechChunk(
             sessionID: sessionID,
-            lane: .mic,
             startedAt: 0,
-            duration: 1,
-            sampleRate: 16_000,
-            channelCount: 1,
-            byteCount: 1_024
+            duration: 1
         ))
 
         require(start == .ready, "Ready model state must allow the STT pipeline to start.")
@@ -767,14 +879,10 @@ struct Meeting007CoreChecks {
         let pipeline = LocalSTTPipeline(transcriber: transcriber)
 
         let start = await pipeline.start(STTSessionConfig(sessionID: sessionID))
-        let segments = await pipeline.receive(CapturedAudioChunk(
+        let segments = await pipeline.receive(makeSpeechChunk(
             sessionID: sessionID,
-            lane: .mic,
             startedAt: 0,
-            duration: 1.2,
-            sampleRate: 16_000,
-            channelCount: 1,
-            byteCount: 3_200
+            duration: 1.2
         ))
 
         require(start == .ready, "Fake local STT must start when the model is ready.")
@@ -788,23 +896,15 @@ struct Meeting007CoreChecks {
         let pipeline = LocalSTTPipeline(transcriber: FakeRussianSpeechTranscriber())
 
         _ = await pipeline.start(STTSessionConfig(sessionID: sessionID))
-        let partialSegments = await pipeline.receive(CapturedAudioChunk(
+        let partialSegments = await pipeline.receive(makeSpeechChunk(
             sessionID: sessionID,
-            lane: .mic,
             startedAt: 0,
-            duration: 1.2,
-            sampleRate: 16_000,
-            channelCount: 1,
-            byteCount: 3_200
+            duration: 1.2
         ))
-        let finalSegments = await pipeline.receive(CapturedAudioChunk(
+        let finalSegments = await pipeline.receive(makeSpeechChunk(
             sessionID: sessionID,
-            lane: .mic,
             startedAt: 1.2,
-            duration: 1.4,
-            sampleRate: 16_000,
-            channelCount: 1,
-            byteCount: 3_200
+            duration: 1.4
         ))
 
         require(partialSegments.first?.state == .partial, "First STT update must be partial.")
@@ -819,14 +919,10 @@ struct Meeting007CoreChecks {
 
         _ = await pipeline.start(STTSessionConfig(sessionID: sessionID))
         _ = await pipeline.stop(sessionID: sessionID)
-        let lateSegments = await pipeline.receive(CapturedAudioChunk(
+        let lateSegments = await pipeline.receive(makeSpeechChunk(
             sessionID: sessionID,
-            lane: .mic,
             startedAt: 3,
-            duration: 1,
-            sampleRate: 16_000,
-            channelCount: 1,
-            byteCount: 1_024
+            duration: 1
         ))
 
         require(lateSegments.isEmpty, "Local STT must ignore runtime chunks after stop.")
@@ -848,23 +944,15 @@ struct Meeting007CoreChecks {
         let pipeline = LocalSTTPipeline(transcriber: FakeRussianSpeechTranscriber())
 
         _ = await pipeline.start(STTSessionConfig(sessionID: sessionID))
-        _ = await pipeline.receive(CapturedAudioChunk(
+        _ = await pipeline.receive(makeSpeechChunk(
             sessionID: sessionID,
-            lane: .mic,
             startedAt: 0,
-            duration: 1.2,
-            sampleRate: 16_000,
-            channelCount: 1,
-            byteCount: 3_200
+            duration: 1.2
         ))
-        let finalSegments = await pipeline.receive(CapturedAudioChunk(
+        let finalSegments = await pipeline.receive(makeSpeechChunk(
             sessionID: sessionID,
-            lane: .mic,
             startedAt: 1.2,
-            duration: 1.4,
-            sampleRate: 16_000,
-            channelCount: 1,
-            byteCount: 3_200
+            duration: 1.4
         ))
         let metadata = MeetingMetadata(
             id: sessionID,
@@ -1199,6 +1287,59 @@ struct Meeting007CoreChecks {
             .appendingPathComponent("Transcripts", isDirectory: true)
     }
 
+    private static func makeCapturedAudioChunk(
+        sessionID: UUID,
+        lane: CaptureLane = .mic,
+        startedAt: TimeInterval,
+        amplitude: Float,
+        duration: TimeInterval = 0.2,
+        sampleRate: Double = 16_000
+    ) -> CapturedAudioChunk {
+        let sampleCount = max(1, Int(duration * sampleRate))
+        let samples = RuntimeAudioSamples(
+            sampleRate: sampleRate,
+            channelCount: 1,
+            samples: Array(repeating: amplitude, count: sampleCount)
+        )
+
+        return CapturedAudioChunk(
+            sessionID: sessionID,
+            lane: lane,
+            startedAt: startedAt,
+            duration: duration,
+            sampleRate: samples.sampleRate,
+            channelCount: samples.channelCount,
+            byteCount: samples.byteCount,
+            samples: samples
+        )
+    }
+
+    private static func makeSpeechChunk(
+        sessionID: UUID,
+        lane: CaptureLane = .mic,
+        startedAt: TimeInterval,
+        duration: TimeInterval
+    ) -> SpeechChunk {
+        let sampleRate: Double = 16_000
+        let sampleCount = max(1, Int(duration * sampleRate))
+        return SpeechChunk(
+            sessionID: sessionID,
+            lane: lane,
+            startedAt: startedAt,
+            duration: duration,
+            sampleRate: sampleRate,
+            samples: ContiguousArray(repeating: 0.2, count: sampleCount)
+        )
+    }
+
+    private static func testVADConfiguration() -> VADSpeechChunker.Configuration {
+        VADSpeechChunker.Configuration(
+            speechLevelThreshold: 0.05,
+            trailingSilenceDuration: 0.15,
+            maximumSpeechDuration: 2
+        )
+    }
+
     private static func require(_ condition: @autoclosure () -> Bool, _ message: String) {
         if !condition() {
             fputs("Check failed: \(message)\n", stderr)
@@ -1242,14 +1383,20 @@ private actor FakeMicrophoneCaptureDriver: MicrophoneCaptureDriver {
     }
 
     func emitTestChunk(sessionID: UUID, startedAt: TimeInterval = 0) async {
+        let samples = RuntimeAudioSamples(
+            sampleRate: 16_000,
+            channelCount: 1,
+            samples: Array(repeating: Float(0.2), count: 4_000)
+        )
         await consumer?.receive(CapturedAudioChunk(
             sessionID: sessionID,
             lane: .mic,
             startedAt: startedAt,
             duration: 0.25,
-            sampleRate: 48_000,
-            channelCount: 1,
-            byteCount: 1_024
+            sampleRate: samples.sampleRate,
+            channelCount: samples.channelCount,
+            byteCount: samples.byteCount,
+            samples: samples
         ))
     }
 

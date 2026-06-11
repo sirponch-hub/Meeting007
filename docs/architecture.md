@@ -43,16 +43,18 @@ Current implemented microphone boundary:
 
 - `RecordingCaptureDriver` remains the Start/Stop lifecycle boundary used by the app.
 - `MicrophoneRecordingCaptureDriver` composes a microphone driver with a runtime-only audio chunk consumer.
-- `CapturedAudioChunk` carries meeting ID, lane, timing, sample rate, channel count, and byte count metadata for future local STT.
-- `RuntimeOnlyAudioChunkConsumer` accepts chunks only while the session is active and clears them on Stop.
-- `AVAudioEngineMicrophoneCaptureDriver` lives in the macOS app edge, requests microphone access on Start, starts `AVAudioEngine`, emits in-memory mic chunk metadata, and updates the UI with a compact mic lane status.
+- `CapturedAudioChunk` carries meeting ID, lane, sample-clock timing, byte count, normalized sample format, and in-memory Float PCM samples.
+- `RuntimeAudioFrameNormalizer` downmixes microphone input to mono and resamples it to 16 kHz for the VAD/STT path.
+- `RuntimeOnlyAudioChunkConsumer` accepts sample-bearing chunks only while the session is active, feeds VAD, and clears PCM buffers on Stop.
+- `VADSpeechChunker` turns speech-positive PCM frames into bounded `SpeechChunk` utterances and flushes active speech on Stop so the last spoken words are not dropped.
+- `AVAudioEngineMicrophoneCaptureDriver` lives in the macOS app edge, requests microphone access on Start, starts `AVAudioEngine`, emits in-memory sample-bearing mic chunks, derives timestamps from emitted sample count, and updates the UI with a compact mic lane status.
 - The first mic slice does not persist raw audio and does not add system audio capture.
 
 ## Transcription Pipeline
 
 The STT engine is behind a protocol boundary:
 
-- Input: timestamped audio chunks with lane metadata.
+- Input: VAD-bounded `SpeechChunk` utterances with lane metadata and normalized in-memory PCM samples.
 - Output: partial and final transcript segments.
 - Default language: Russian.
 - Default execution: local Apple Silicon acceleration through a Whisper-family runtime.
@@ -62,13 +64,13 @@ The chunker uses VAD to cut speech at natural boundaries. Partial segments may u
 Current implemented STT boundary:
 
 - `STTSessionConfig` defaults transcription to Russian (`ru`) and the microphone lane.
-- `LocalSTTPipeline` owns active-session lifecycle, accepts runtime audio chunks, upserts partial/final `TranscriptSegment` updates, ignores chunks after Stop, and exposes visible segments for UI/copy/export.
+- `LocalSTTPipeline` owns active-session lifecycle, accepts `SpeechChunk` utterances, upserts partial/final `TranscriptSegment` updates, ignores chunks after Stop, and exposes visible segments for UI/copy/export.
 - `SpeechTranscribing` is the runtime protocol that real WhisperKit or another local STT adapter will implement.
 - `FakeRussianSpeechTranscriber` provides deterministic Russian partial/final segments for CI-safe checks and UI wiring without cloud or model files.
 - `WhisperModelPolicy.defaultRussian` pins `large-v3-v20240930_626MB` as the production Russian model candidate and keeps `tiny` debug-only.
 - `LocalSTTModelManaging` owns model readiness checks without downloading or uploading anything.
 - `ModelManagedSpeechTranscriber` blocks transcription when the pinned model is missing, invalid, downloading, or failed, and passes through to the current transcriber only when the model is ready.
-- The app Settings surface shows Russian model status and artifact-only trust copy. Real WhisperKit model loading, model download, PCM sample conversion, and VAD chunking are the next adapter slices.
+- The app Settings surface shows Russian model status and artifact-only trust copy. Real WhisperKit model loading and consented model download are still separate future slices.
 
 ## Storage
 

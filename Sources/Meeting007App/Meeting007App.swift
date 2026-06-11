@@ -66,18 +66,20 @@ final class RecordingShellViewModel: ObservableObject {
     ) {
         self.microphoneStatusModel = microphoneStatusModel
         self.modelManager = modelManager
-        self.controller = controller ?? RecordingSessionController(
-            captureDriver: MicrophoneRecordingCaptureDriver(
-                microphone: AVAudioEngineMicrophoneCaptureDriver(statusModel: microphoneStatusModel)
-            )
-        )
-        self.transcriptPreviewController = transcriptPreviewController
-        self.sttPipeline = sttPipeline ?? LocalSTTPipeline(
+        let effectiveSTTPipeline = sttPipeline ?? LocalSTTPipeline(
             transcriber: ModelManagedSpeechTranscriber(
                 modelManager: modelManager,
                 wrapped: FakeRussianSpeechTranscriber()
             )
         )
+        self.controller = controller ?? RecordingSessionController(
+            captureDriver: MicrophoneRecordingCaptureDriver(
+                microphone: AVAudioEngineMicrophoneCaptureDriver(statusModel: microphoneStatusModel),
+                consumer: RuntimeOnlyAudioChunkConsumer(speechChunkConsumer: effectiveSTTPipeline)
+            )
+        )
+        self.transcriptPreviewController = transcriptPreviewController
+        self.sttPipeline = effectiveSTTPipeline
         self.recordingStore = recordingStore
         self.clipboardWriter = clipboardWriter
         self.transcriptFolderSettings = transcriptFolderSettings
@@ -430,32 +432,19 @@ final class RecordingShellViewModel: ObservableObject {
         }
 
         transcriptionStatusText = "Transcribing locally"
-        await advanceLocalTranscription(sessionID: session.id, startedAt: 0)
+        previewSegments = await sttPipeline.visibleSegments()
 
         stopTranscriptPreviewTimer()
-        transcriptPreviewTimer = Timer.scheduledTimer(withTimeInterval: 1.8, repeats: true) { [weak self] _ in
+        transcriptPreviewTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self,
-                      let activeSessionID = await self.controller.currentSession()?.id else {
+                      await self.controller.currentSession()?.id != nil else {
                     return
                 }
 
-                let latestEndTime = self.previewSegments.map(\.endTime).max() ?? 0
-                await self.advanceLocalTranscription(sessionID: activeSessionID, startedAt: latestEndTime)
+                self.previewSegments = await self.sttPipeline.visibleSegments()
             }
         }
-    }
-
-    private func advanceLocalTranscription(sessionID: UUID, startedAt: TimeInterval) async {
-        previewSegments = await sttPipeline.receive(CapturedAudioChunk(
-            sessionID: sessionID,
-            lane: .mic,
-            startedAt: startedAt,
-            duration: 1.2,
-            sampleRate: 16_000,
-            channelCount: 1,
-            byteCount: 3_200
-        ))
     }
 
     private func stopTranscriptPreviewTimer() {
@@ -563,6 +552,7 @@ final class AVAudioEngineMicrophoneCaptureDriver: MicrophoneCaptureDriver, @unch
     private let stateLock = NSLock()
     private var engine: AVAudioEngine?
     private var activeSessionID: UUID?
+    private var emittedSampleCount = 0
 
     init(statusModel: MicrophoneCaptureStatusModel) {
         self.statusModel = statusModel
@@ -594,25 +584,32 @@ final class AVAudioEngineMicrophoneCaptureDriver: MicrophoneCaptureDriver, @unch
             )
         }
 
-        let startedAt = Date()
+        stateLock.withLock {
+            emittedSampleCount = 0
+        }
         inputNode.installTap(onBus: 0, bufferSize: 1_024, format: format) { [weak self] buffer, _ in
             guard let self else {
                 return
             }
 
-            let duration = Double(buffer.frameLength) / format.sampleRate
             let level = Self.normalizedLevel(from: buffer)
-            let startedAtOffset = Date().timeIntervalSince(startedAt)
-            let byteCount = Int(buffer.frameLength) * Int(format.channelCount) * MemoryLayout<Float>.size
+            let normalizedSamples = Self.normalizedSamples(from: buffer)
+            let duration = Double(normalizedSamples.frameCount) / normalizedSamples.sampleRate
+            let startedAtOffset = self.stateLock.withLock {
+                let offset = Double(self.emittedSampleCount) / normalizedSamples.sampleRate
+                self.emittedSampleCount += normalizedSamples.frameCount
+                return offset
+            }
             Task {
                 await consumer.receive(CapturedAudioChunk(
                     sessionID: session.id,
                     lane: .mic,
                     startedAt: startedAtOffset,
                     duration: duration,
-                    sampleRate: format.sampleRate,
-                    channelCount: Int(format.channelCount),
-                    byteCount: byteCount
+                    sampleRate: normalizedSamples.sampleRate,
+                    channelCount: normalizedSamples.channelCount,
+                    byteCount: normalizedSamples.byteCount,
+                    samples: normalizedSamples
                 ))
                 await self.updateStatus(level > 0.03 ? .listening(level: level) : .quiet)
             }
@@ -641,6 +638,7 @@ final class AVAudioEngineMicrophoneCaptureDriver: MicrophoneCaptureDriver, @unch
             let engineToStop = engine
             engine = nil
             activeSessionID = nil
+            emittedSampleCount = 0
             return (shouldStop, engineToStop)
         }
 
@@ -692,6 +690,29 @@ final class AVAudioEngineMicrophoneCaptureDriver: MicrophoneCaptureDriver, @unch
         let meanSquare = sum / Float(frameLength * channelCount)
         let rms = sqrt(meanSquare)
         return min(max(Double(rms) * 12, 0), 1)
+    }
+
+    private static func normalizedSamples(from buffer: AVAudioPCMBuffer) -> RuntimeAudioSamples {
+        guard let channelData = buffer.floatChannelData, buffer.frameLength > 0 else {
+            return RuntimeAudioSamples(sampleRate: RuntimeAudioFrameNormalizer.defaultTargetSampleRate, channelCount: 1, samples: [])
+        }
+
+        let channelCount = max(Int(buffer.format.channelCount), 1)
+        let frameLength = Int(buffer.frameLength)
+        var interleavedSamples: [Float] = []
+        interleavedSamples.reserveCapacity(frameLength * channelCount)
+
+        for frame in 0..<frameLength {
+            for channel in 0..<channelCount {
+                interleavedSamples.append(channelData[channel][frame])
+            }
+        }
+
+        return RuntimeAudioFrameNormalizer.normalizedMonoSamples(
+            interleavedSamples,
+            sourceSampleRate: buffer.format.sampleRate,
+            sourceChannelCount: channelCount
+        )
     }
 }
 

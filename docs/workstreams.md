@@ -49,6 +49,21 @@ Remind the user to consider extra skills or MCP/connectors when these moments ar
 
 ## Current Workstreams
 
+## PCM/VAD Sample-Bearing Capture
+
+- Status: Ready for Review
+- Owner: Codex + BA/UX/Architecture/QA/Developer agents
+- User outcome: Spoken Russian microphone audio can now reach the local STT boundary as in-memory speech windows, which is the prerequisite for real WhisperKit transcription of actual mic audio.
+- Scope: Add sample-bearing runtime PCM chunks, mono 16 kHz normalization, VAD speech-window chunking, Stop-time speech flush, STT boundary input as `SpeechChunk`, and AVAudioEngine mic emission of in-memory PCM with sample-clock timestamps.
+- Out of scope: Real WhisperKit dependency, model download, raw audio file retention, system audio capture, speaker diarization, waveform/debug UI, cloud fallback, telemetry, REST/MCP exposure of samples, and any hosted backend.
+- Docs touched: `docs/architecture.md`, `docs/security-privacy.md`, `docs/testing.md`, `docs/workstreams.md`.
+- Verification: `swift run Meeting007CoreChecks` passed; `swift build --product Meeting007App` passed with sandbox escalation for Swift module cache access.
+- Gates: BA confirmed the user outcome is sample-bearing mic capture for local transcription without raw persistence; UX required no waveform/debug UI and only existing calm listening/quiet status; architecture required PCM normalization, lane preservation, VAD before STT, and sample-clock timing; QA required synthetic PCM/VAD checks, Stop/late-frame behavior, and privacy regression checks; Developer recommended TDD checks before implementation; user acceptance pending; merge pending.
+- Subagents: BA, UX Designer, System Architect/macOS STT Specialist, Acceptance/QA, and Developer outputs summarized here.
+- TDD/BDD evidence: Added checks for runtime PCM normalization, active-session-only sample buffering, VAD silence suppression, speech chunk emission, short-pause/long-silence boundaries, Stop flush, STT over `SpeechChunk`, and Markdown privacy regression.
+- Open decisions: Final production VAD thresholds, WhisperKit adapter package pin, model cache path, real Russian speech acceptance fixture, and system-audio lane normalization.
+- Handoff notes: PCM and `SpeechChunk` samples are runtime-only sensitive data. Do not expose them through Markdown, SQLite, REST, MCP, logs, debug descriptions, or files. The next WhisperKit adapter should consume `SpeechChunk` rather than `CapturedAudioChunk`.
+
 ## WhisperKit Adapter + Model Manager
 
 - Status: Ready for Review

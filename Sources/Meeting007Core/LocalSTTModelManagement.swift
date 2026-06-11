@@ -157,7 +157,7 @@ public actor ModelManagedSpeechTranscriber: SpeechTranscribing {
         }
     }
 
-    public func receive(_ chunk: CapturedAudioChunk) async -> [TranscriptSegment] {
+    public func receive(_ chunk: SpeechChunk) async -> [TranscriptSegment] {
         guard activeSessionID == chunk.sessionID else {
             return []
         }

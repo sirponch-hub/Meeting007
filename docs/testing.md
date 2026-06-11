@@ -18,9 +18,10 @@ Required coverage:
 - Markdown export.
 - Markdown file writer path, filename, folder creation, temp-file cleanup, and local-only scope.
 - Markdown transcript folder setting, default folder behavior, selected-folder persistence, write-access validation, and recoverable unavailable-folder errors.
-- Microphone recording lifecycle with fake capture: Start opens one mic lane, Stop closes it, late chunks are rejected, chunk metadata remains session/lane/timing aware, and microphone start failures surface stable user-facing errors.
-- Runtime-only audio behavior: fake mic chunks do not create raw audio files and Markdown export does not reference audio artifacts.
-- Local STT pipeline behavior: Russian default configuration, mic-to-`Me` lane mapping, partial-to-final updates with stable segment identity, stopped-session chunk rejection, missing-model recoverable state, and exportability of final STT segments.
+- Microphone recording lifecycle with fake capture: Start opens one mic lane, Stop closes it, late chunks are rejected, chunks remain session/lane/timing aware, sample-bearing PCM stays in memory, and microphone start failures surface stable user-facing errors.
+- Runtime-only audio behavior: PCM is downmixed/resampled to mono 16 kHz, runtime chunks do not create raw audio files, Stop clears buffers, and Markdown export does not reference audio artifacts or sample metadata.
+- VAD behavior: silence-only chunks are suppressed, speech-positive chunks create `SpeechChunk` utterances, short pauses stay inside one utterance, long silence separates utterances, and Stop flushes open speech deterministically.
+- Local STT pipeline behavior: Russian default configuration, `SpeechChunk` input, mic-to-`Me` lane mapping, partial-to-final updates with stable segment identity, stopped-session chunk rejection, missing-model recoverable state, and exportability of final STT segments.
 - Local STT model manager behavior: pinned Russian model policy, missing/invalid/downloading/download-failed recoverable states, ready-model pass-through, explicit prepared-artifact install boundary, and no automatic model download from core checks.
 - Completed-session runtime history after Stop.
 - In-memory history deduplication and newest-first ordering.
@@ -33,6 +34,7 @@ Required coverage:
 Use deterministic fixtures:
 
 - Synthetic audio chunks for mic and system lanes.
+- Synthetic PCM frames for VAD and sample-clock timing.
 - Fake local STT engine returning known partial and final segments.
 - Temporary SQLite database.
 - Temporary Markdown output folder.
@@ -58,6 +60,9 @@ Use deterministic fixtures:
 - Manual start/stop recording.
 - Start recording from fresh microphone permission state and verify macOS asks for access.
 - Grant microphone access and verify the mic lane shows activity while speaking.
+- Speak Russian into the microphone and verify live transcript text appears only after speech is detected.
+- Sit quietly for several seconds and verify silence does not create new transcript text.
+- Stop while speaking and verify the last spoken phrase is not silently lost by the capture/VAD boundary.
 - Deny microphone access and verify the app shows a recoverable blocked state without starting fake transcript preview.
 - Stop recording and verify mic activity stops.
 - Start/Stop recording multiple times and verify no duplicate mic activity indicators or stale recording states remain.
