@@ -20,6 +20,8 @@ These rules apply to all AI-assisted work in this repository. Reusable role prom
 - Untested work must not be merged into `main`.
 - Feature work must happen on a branch after business requirements, UX impact, architecture impact, and acceptance scenarios are documented.
 - Feature work must use the specialist subagents defined in `docs/process/agent-workflow.md` before implementation. Do not self-approve BA, UX, architecture, QA, or specialist gates when a matching subagent can be used.
+- Code changes must use the Developer subagent before implementation. The Developer subagent must receive the approved requirements, architecture notes, acceptance criteria, and test expectations.
+- Code changes must follow TDD/BDD: add or update an automated check before or alongside implementation. If the change cannot be automated yet, document the missing harness, add a manual acceptance checklist before coding, and keep the branch out of `main` unless the user explicitly accepts the test gap.
 - Specialist review is required when work affects audio capture, local STT, privacy/security, CI/build, performance, QA automation, or user-facing documentation.
 - Run the relevant verification command before handing work back. If checks cannot run, state why and mark the work as not ready for `main`.
 - Do not commit generated build outputs, audio recordings, model files, secrets, tokens, local databases, or user transcripts.
@@ -52,6 +54,7 @@ These rules apply to all AI-assisted work in this repository. Reusable role prom
 - Integration tests cover mocked audio chunks through transcription and storage.
 - Manual QA must include Russian speech and mic/system-audio capture on Apple Silicon.
 - Every pull request must state which automated checks and manual QA were run.
+- Every code workstream must state its TDD/BDD evidence: test/check added first, test/check updated alongside implementation, or documented accepted gap.
 - If a change cannot be tested yet, document the missing test harness and keep the change out of `main` until the gap is closed.
 
 ## Documentation Expectations

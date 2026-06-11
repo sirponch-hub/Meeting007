@@ -14,6 +14,7 @@ Required behavior:
 
 - Before implementation, spawn or message the relevant role subagents for the workstream.
 - Do not start coding until BA requirements, UX impact when relevant, architecture impact, and acceptance scenarios are available.
+- Code-changing work always requires a Developer subagent in addition to BA/UX/Architecture/QA gates.
 - UI-affecting work always requires UX Designer and Acceptance/QA subagents.
 - Storage, privacy, API/MCP, audio, STT, performance, CI/build, or documentation-sensitive work requires the matching specialist subagent listed in this workflow.
 - If subagent tooling is unavailable, mark the workstream blocked and ask the user whether to proceed without the required gate.
@@ -190,7 +191,10 @@ Purpose: implement the smallest safe increment on a branch.
 Rules:
 
 - Create a feature branch before code changes.
+- Use the Developer subagent for code-changing work. The main Codex agent may integrate and review, but must not self-approve the developer gate.
 - Use TDD/BDD: write or update checks that express expected behavior before or alongside implementation.
+- Preferred order is red-green-refactor: add or update a failing/meaningful check, implement the smallest change, run the check, then refactor if needed.
+- For UI-only changes where no automated UI harness exists yet, write acceptance scenarios and manual QA steps before implementation, document the missing automation, and keep the gap visible in the workstream.
 - Keep changes scoped to the approved workstream.
 - Do not merge untested work into `main`.
 - Do not revert unrelated user or agent changes.
@@ -198,13 +202,15 @@ Rules:
 Required outputs:
 
 - Code changes.
-- Automated checks.
+- Automated checks and explicit TDD/BDD evidence.
 - Updated docs.
 - Branch notes in `docs/workstreams.md`.
+- Developer subagent summary: what files changed, what tests/checks were added or updated, and what gaps remain.
 
 Gate:
 
 - Branch is not ready until local verification passes or missing test infrastructure is documented and the work is explicitly marked not ready for `main`.
+- Branch is not ready until the Developer subagent gate is complete and summarized.
 
 ## 6. Integration Tests
 
