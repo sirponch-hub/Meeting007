@@ -73,7 +73,9 @@ Current implemented STT boundary:
 - `Meeting007WhisperKit` is an isolated adapter target that depends on the upstream `argmax-oss-swift` Swift package product `WhisperKit` while keeping `Meeting007Core` dependency-light and fast to test.
 - `WhisperKitSpeechTranscriber` compiles behind the same `SpeechTranscribing` protocol and accepts `SpeechChunk` input only; it does not know about `AVAudioEngine`, VAD internals, Markdown, SQLite, REST, or MCP.
 - The WhisperKit adapter defaults to Russian, requires model readiness before transcribing, and deliberately does not initiate automatic model download.
-- The app Settings surface shows Russian model status and artifact-only trust copy. Real WhisperKit runtime enablement in the app flow and consented model download are still separate future slices.
+- `LocalSTTModelInstaller` owns explicit-consent install lifecycle separately from transcription: pending consent, progress, verification, ready, cancellation, and failure.
+- `LocalSTTModelStore` checks the app-owned model folder under Application Support and exposes readiness through `LocalSTTModelManaging`; model files are never stored in the Markdown transcript folder.
+- The app Settings surface shows Russian model status and starts install only after a confirmation sheet. Real recursive HuggingFace artifact download/checksum hardening and real WhisperKit runtime enablement in the app flow are still separate future slices.
 
 ## Storage
 

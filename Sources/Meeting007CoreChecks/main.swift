@@ -43,6 +43,14 @@ struct Meeting007CoreChecks {
         await checkInvalidModelReturnsRecoverableUnavailableState()
         await checkReadyModelAllowsCurrentFakeTranscriberFlow()
         checkModelInstallRequiresExplicitPreparedLocalArtifact()
+        await checkModelInstallerDoesNotStartWithoutConsent()
+        await checkInstallRequiresExplicitConsent()
+        await checkConfirmedInstallStartsDownload()
+        await checkInstallerPublishesProgress()
+        await checkSuccessfulInstallReturnsReadyAvailability()
+        await checkFailedInstallKeepsFakeSTTAvailable()
+        await checkCancelStopsDownloadAndClearsPartialState()
+        await checkInstallerDoesNotPersistAudioArtifacts()
         await checkSTTMapsMicLaneToMeSegments()
         await checkSTTEmitsPartialThenFinalForSameSegmentID()
         await checkSTTIgnoresChunksAfterSessionStops()
@@ -873,6 +881,166 @@ struct Meeting007CoreChecks {
         require(consentedRequest.canInstall, "Model install boundary requires consent plus a local artifact path.")
     }
 
+    private static func checkModelInstallerDoesNotStartWithoutConsent() async {
+        let downloader = FakeModelDownloader(result: .failure(.downloadSourceUnavailable))
+        let installer = LocalSTTModelInstaller(
+            downloader: downloader,
+            store: LocalSTTModelStore(rootDirectory: temporaryModelFolder())
+        )
+
+        let state = await installer.state()
+        let requests = await downloader.downloadRequests()
+
+        require(state == .notInstalled, "Model installer must start without an active install.")
+        require(requests.isEmpty, "Model downloader must not start before explicit consent.")
+    }
+
+    private static func checkInstallRequiresExplicitConsent() async {
+        let downloader = FakeModelDownloader(result: .failure(.downloadSourceUnavailable))
+        let installer = LocalSTTModelInstaller(
+            downloader: downloader,
+            store: LocalSTTModelStore(rootDirectory: temporaryModelFolder())
+        )
+
+        await installer.prepareInstall(policy: .defaultRussian)
+        let pendingState = await installer.state()
+        await installer.cancelConsent()
+        let cancelledState = await installer.state()
+        let requests = await downloader.downloadRequests()
+
+        require(pendingState == .awaitingConsent(.defaultRussian), "Install action must first open an explicit consent state.")
+        require(cancelledState == .notInstalled, "Cancelling consent must return to not installed state.")
+        require(requests.isEmpty, "Cancelling consent must not start a download.")
+    }
+
+    private static func checkConfirmedInstallStartsDownload() async {
+        let modelFolder = temporaryModelFolder()
+        let artifact = DownloadedModelArtifact(
+            policy: .defaultRussian,
+            localURL: modelFolder.appendingPathComponent("prepared-model", isDirectory: true)
+        )
+        let downloader = FakeModelDownloader(result: .success(artifact))
+        let installer = LocalSTTModelInstaller(
+            downloader: downloader,
+            store: LocalSTTModelStore(rootDirectory: modelFolder)
+        )
+
+        await installer.confirmInstall(policy: .defaultRussian)
+        let requests = await downloader.downloadRequests()
+
+        require(requests.count == 1, "Confirmed install must start exactly one controlled download.")
+        require(requests.first?.policy == .defaultRussian, "Installer must download the pinned Russian model policy.")
+        require(requests.first?.expectedBytes == WhisperModelPolicy.defaultRussian.approximateSizeInBytes, "Installer must disclose the expected model size.")
+    }
+
+    private static func checkInstallerPublishesProgress() async {
+        let progress = ModelDownloadProgress(
+            phase: .downloading,
+            downloadedBytes: 313_000_000,
+            expectedBytes: 626_000_000
+        )
+        let downloader = FakeModelDownloader(
+            result: .failure(.networkUnavailable),
+            progressUpdates: [progress]
+        )
+        let installer = LocalSTTModelInstaller(
+            downloader: downloader,
+            store: LocalSTTModelStore(rootDirectory: temporaryModelFolder())
+        )
+
+        await installer.confirmInstall(policy: .defaultRussian)
+        let state = await installer.state()
+
+        require(progress.fractionCompleted == 0.5, "Installer progress must expose stable fraction completed.")
+        require(state == .failed(.networkUnavailable), "Failed install must expose a recoverable failure state after progress.")
+    }
+
+    private static func checkSuccessfulInstallReturnsReadyAvailability() async {
+        let modelFolder = temporaryModelFolder()
+        let store = LocalSTTModelStore(rootDirectory: modelFolder)
+        let artifact = DownloadedModelArtifact(
+            policy: .defaultRussian,
+            localURL: modelFolder.appendingPathComponent("prepared-model", isDirectory: true)
+        )
+        let installer = LocalSTTModelInstaller(
+            downloader: FakeModelDownloader(result: .success(artifact)),
+            store: store
+        )
+
+        await installer.confirmInstall(policy: .defaultRussian)
+        let state = await installer.state()
+        let availability = await store.availability(for: .defaultRussian)
+
+        require(availability == .ready, "Successful model install must make LocalSTTModelManaging return ready.")
+        if case .ready(let modelURL) = state {
+            require(modelURL.lastPathComponent == WhisperModelPolicy.defaultRussian.modelID, "Ready state must point at the local model folder.")
+        } else {
+            require(false, "Successful install must enter ready state.")
+        }
+    }
+
+    private static func checkFailedInstallKeepsFakeSTTAvailable() async {
+        let installer = LocalSTTModelInstaller(
+            downloader: FakeModelDownloader(result: .failure(.networkUnavailable)),
+            store: LocalSTTModelStore(rootDirectory: temporaryModelFolder())
+        )
+        let sessionID = UUID()
+        let pipeline = LocalSTTPipeline(transcriber: FakeRussianSpeechTranscriber())
+
+        await installer.confirmInstall(policy: .defaultRussian)
+        _ = await pipeline.start(STTSessionConfig(sessionID: sessionID))
+        let partialSegments = await pipeline.receive(makeSpeechChunk(sessionID: sessionID, startedAt: 0, duration: 1.2))
+        let finalSegments = await pipeline.receive(makeSpeechChunk(sessionID: sessionID, startedAt: 1.2, duration: 1.4))
+        let installState = await installer.state()
+
+        require(installState == .failed(.networkUnavailable), "Installer failure must stay recoverable.")
+        require(partialSegments.first?.state == .partial, "Fake Russian STT must remain available after installer failure.")
+        require(finalSegments.first?.state == .final, "Fake Russian STT final output must remain available after installer failure.")
+    }
+
+    private static func checkCancelStopsDownloadAndClearsPartialState() async {
+        let downloader = FakeModelDownloader(result: .failure(.cancelled))
+        let installer = LocalSTTModelInstaller(
+            downloader: downloader,
+            store: LocalSTTModelStore(rootDirectory: temporaryModelFolder())
+        )
+
+        await installer.prepareInstall(policy: .defaultRussian)
+        await installer.cancelInstall()
+
+        let state = await installer.state()
+        let requests = await downloader.downloadRequests()
+
+        require(state == .notInstalled, "Cancel before confirmed install must clear pending consent.")
+        require(requests.isEmpty, "Cancel before confirmed install must not create partial download state.")
+    }
+
+    private static func checkInstallerDoesNotPersistAudioArtifacts() async {
+        let modelFolder = temporaryModelFolder()
+        let artifact = DownloadedModelArtifact(
+            policy: .defaultRussian,
+            localURL: modelFolder.appendingPathComponent("prepared-model", isDirectory: true)
+        )
+        let installer = LocalSTTModelInstaller(
+            downloader: FakeModelDownloader(result: .success(artifact)),
+            store: LocalSTTModelStore(rootDirectory: modelFolder)
+        )
+        let audioExtensions = Set(["wav", "caf", "m4a", "pcm", "aiff", "flac", "mp3"])
+
+        await installer.confirmInstall(policy: .defaultRussian)
+
+        do {
+            let contents = try FileManager.default.contentsOfDirectory(
+                at: modelFolder,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )
+            require(contents.allSatisfy { !audioExtensions.contains($0.pathExtension.lowercased()) }, "Model installer must not create raw audio artifacts.")
+        } catch {
+            require(false, "Model installer audio artifact check must not throw: \(error)")
+        }
+    }
+
     private static func checkSTTMapsMicLaneToMeSegments() async {
         let sessionID = UUID()
         let transcriber = FakeRussianSpeechTranscriber()
@@ -1285,6 +1453,14 @@ struct Meeting007CoreChecks {
             .appendingPathComponent("Meeting007CoreChecks", isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
             .appendingPathComponent("Transcripts", isDirectory: true)
+    }
+
+    private static func temporaryModelFolder() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("Meeting007CoreChecks", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("Models", isDirectory: true)
+            .appendingPathComponent("whisper", isDirectory: true)
     }
 
     private static func makeCapturedAudioChunk(

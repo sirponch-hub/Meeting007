@@ -51,9 +51,10 @@ Current microphone capture slice:
 Current local STT model policy:
 
 - The current model manager pins the Russian production candidate to `large-v3-v20240930_626MB` and treats `tiny` as debug-only.
-- The app can show model readiness state in Settings, but the download action remains disabled until a separate consented installer slice is implemented.
+- The app can show model readiness state in Settings and requires a confirmation sheet before starting model installation.
+- Model installer state is separate from meeting recording and transcript export; it may write model markers/files only under app-owned Application Support model storage.
 - The WhisperKit adapter target compiles against the upstream local SDK, but Meeting007 does not call automatic model download from the adapter.
-- The current branch does not download or bundle Whisper model files and does not add a Meeting007 cloud transcription path.
+- The current branch does not bundle Whisper model files and does not add a Meeting007 cloud transcription path.
 - Model download may fetch model artifacts only; it must never upload audio, transcripts, meeting metadata, or debug content.
 
 ## Runtime Transcript History

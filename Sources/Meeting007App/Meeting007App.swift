@@ -38,9 +38,11 @@ final class RecordingShellViewModel: ObservableObject {
     @Published private(set) var microphoneStatus: MicrophoneCaptureStatus = .idle
     @Published private(set) var transcriptionStatusText = "Local transcription ready"
     @Published private(set) var transcriptionModelAvailability: LocalSTTModelAvailability = .missing
+    @Published private(set) var transcriptionModelInstallState: LocalSTTModelInstallState = .notInstalled
 
     private let microphoneStatusModel: MicrophoneCaptureStatusModel
     private let modelManager: any LocalSTTModelManaging
+    private let modelInstaller: LocalSTTModelInstaller
     private let controller: RecordingSessionController
     private let transcriptPreviewController: LiveTranscriptPreviewController
     private let sttPipeline: LocalSTTPipeline
@@ -56,7 +58,8 @@ final class RecordingShellViewModel: ObservableObject {
     init(
         controller: RecordingSessionController? = nil,
         microphoneStatusModel: MicrophoneCaptureStatusModel = MicrophoneCaptureStatusModel(),
-        modelManager: any LocalSTTModelManaging = FakeLocalSTTModelManager(availability: .ready),
+        modelManager: (any LocalSTTModelManaging)? = nil,
+        modelInstaller: LocalSTTModelInstaller? = nil,
         transcriptPreviewController: LiveTranscriptPreviewController = LiveTranscriptPreviewController(),
         sttPipeline: LocalSTTPipeline? = nil,
         recordingStore: any RecordingSessionStore = InMemoryRecordingSessionStore(),
@@ -65,12 +68,15 @@ final class RecordingShellViewModel: ObservableObject {
         transcriptFileWriter: (any TranscriptFileWriting)? = nil
     ) {
         self.microphoneStatusModel = microphoneStatusModel
-        self.modelManager = modelManager
+        let defaultModelStore = LocalSTTModelStore()
+        let resolvedModelManager = modelManager ?? defaultModelStore
+        self.modelManager = resolvedModelManager
+        self.modelInstaller = modelInstaller ?? LocalSTTModelInstaller(
+            downloader: UnconfiguredModelDownloader(),
+            store: defaultModelStore
+        )
         let effectiveSTTPipeline = sttPipeline ?? LocalSTTPipeline(
-            transcriber: ModelManagedSpeechTranscriber(
-                modelManager: modelManager,
-                wrapped: FakeRussianSpeechTranscriber()
-            )
+            transcriber: FakeRussianSpeechTranscriber()
         )
         self.controller = controller ?? RecordingSessionController(
             captureDriver: MicrophoneRecordingCaptureDriver(
@@ -271,6 +277,35 @@ final class RecordingShellViewModel: ObservableObject {
 
     func refreshTranscriptionModelAvailability() async {
         transcriptionModelAvailability = await modelManager.availability(for: .defaultRussian)
+        transcriptionModelInstallState = await modelInstaller.state()
+    }
+
+    func prepareTranscriptionModelInstall() {
+        Task {
+            await modelInstaller.prepareInstall(policy: .defaultRussian)
+            transcriptionModelInstallState = await modelInstaller.state()
+        }
+    }
+
+    func cancelTranscriptionModelInstallConsent() {
+        Task {
+            await modelInstaller.cancelConsent()
+            transcriptionModelInstallState = await modelInstaller.state()
+        }
+    }
+
+    func confirmTranscriptionModelInstall() {
+        Task {
+            await modelInstaller.confirmInstall(policy: .defaultRussian)
+            await refreshTranscriptionModelAvailability()
+        }
+    }
+
+    func cancelTranscriptionModelInstall() {
+        Task {
+            await modelInstaller.cancelInstall()
+            await refreshTranscriptionModelAvailability()
+        }
     }
 
     func retryMarkdownExport() {
@@ -742,6 +777,7 @@ struct RecordingShellView: View {
                     folderURL: viewModel.transcriptFolderURL,
                     feedbackText: viewModel.transcriptStorageFeedbackText,
                     modelAvailability: viewModel.transcriptionModelAvailability,
+                    modelInstallState: viewModel.transcriptionModelInstallState,
                     modelPolicy: .defaultRussian,
                     onChooseFolder: viewModel.chooseTranscriptFolder,
                     onRevealFolder: viewModel.revealTranscriptFolder,
@@ -751,7 +787,11 @@ struct RecordingShellView: View {
                         Task {
                             await viewModel.refreshTranscriptionModelAvailability()
                         }
-                    }
+                    },
+                    onPrepareModelInstall: viewModel.prepareTranscriptionModelInstall,
+                    onConfirmModelInstall: viewModel.confirmTranscriptionModelInstall,
+                    onCancelModelInstallConsent: viewModel.cancelTranscriptionModelInstallConsent,
+                    onCancelModelInstall: viewModel.cancelTranscriptionModelInstall
                 )
             }
         }
@@ -900,12 +940,17 @@ struct SettingsView: View {
     let folderURL: URL
     let feedbackText: String?
     let modelAvailability: LocalSTTModelAvailability
+    let modelInstallState: LocalSTTModelInstallState
     let modelPolicy: WhisperModelPolicy
     let onChooseFolder: () -> Void
     let onRevealFolder: () -> Void
     let onCopyPath: () -> Void
     let onResetToDefault: () -> Void
     let onRefreshModelStatus: () -> Void
+    let onPrepareModelInstall: () -> Void
+    let onConfirmModelInstall: () -> Void
+    let onCancelModelInstallConsent: () -> Void
+    let onCancelModelInstall: () -> Void
 
     var body: some View {
         ScrollView {
@@ -942,7 +987,12 @@ struct SettingsView: View {
                     TranscriptionModelSettingRow(
                         availability: modelAvailability,
                         policy: modelPolicy,
-                        onRefresh: onRefreshModelStatus
+                        installState: modelInstallState,
+                        onRefresh: onRefreshModelStatus,
+                        onPrepareInstall: onPrepareModelInstall,
+                        onConfirmInstall: onConfirmModelInstall,
+                        onCancelConsent: onCancelModelInstallConsent,
+                        onCancelInstall: onCancelModelInstall
                     )
                 }
                 .padding(16)
@@ -958,7 +1008,12 @@ struct SettingsView: View {
 struct TranscriptionModelSettingRow: View {
     let availability: LocalSTTModelAvailability
     let policy: WhisperModelPolicy
+    let installState: LocalSTTModelInstallState
     let onRefresh: () -> Void
+    let onPrepareInstall: () -> Void
+    let onConfirmInstall: () -> Void
+    let onCancelConsent: () -> Void
+    let onCancelInstall: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -971,7 +1026,7 @@ struct TranscriptionModelSettingRow: View {
                     .foregroundStyle(statusColor)
             }
 
-            Text("Meeting007 will use \(policy.modelID) for Russian transcription. The model artifact is about \(formattedSize) and stays on this Mac.")
+            Text("Meeting007 will use the Russian transcription model for local transcription. The model artifact is about \(formattedSize) and stays on this Mac.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
@@ -979,16 +1034,88 @@ struct TranscriptionModelSettingRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
+            installStateContent
+
             HStack(spacing: 8) {
                 Button("Refresh Status", action: onRefresh)
                     .buttonStyle(.bordered)
-                Button("Download Model...") {}
-                    .buttonStyle(.borderedProminent)
-                    .disabled(true)
-                    .help("Model download consent and installation will be enabled in the WhisperKit runtime slice.")
+                primaryAction
             }
         }
+        .alert("Install Russian transcription model?", isPresented: consentBinding) {
+            Button("Install", action: onConfirmInstall)
+            Button("Cancel", role: .cancel, action: onCancelConsent)
+        } message: {
+            Text("Meeting007 will download about \(formattedSize) to this Mac. The model runs locally, so meeting audio is not uploaded and transcription can work offline after installation.")
+        }
         .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private var installStateContent: some View {
+        switch installState {
+        case .notInstalled, .awaitingConsent:
+            Text("Install the Russian model to enable local transcription.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .downloading(let progress):
+            VStack(alignment: .leading, spacing: 6) {
+                ProgressView(value: progress.fractionCompleted ?? 0)
+                    .progressViewStyle(.linear)
+                Text(progressText(for: progress))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        case .verifying:
+            ProgressView("Verifying local model")
+                .font(.caption)
+        case .ready:
+            Text("Local Russian transcription is ready. Audio stays on this Mac.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .failed(let failure):
+            Text(failure.userFacingMessage)
+                .font(.caption)
+                .foregroundStyle(.orange)
+        }
+    }
+
+    @ViewBuilder
+    private var primaryAction: some View {
+        switch installState {
+        case .notInstalled:
+            Button("Install Model", action: onPrepareInstall)
+                .buttonStyle(.borderedProminent)
+        case .awaitingConsent:
+            Button("Install Model", action: onPrepareInstall)
+                .buttonStyle(.borderedProminent)
+        case .downloading, .verifying:
+            Button("Cancel", action: onCancelInstall)
+                .buttonStyle(.bordered)
+        case .ready:
+            Text("Ready")
+                .font(.callout.weight(.medium))
+                .foregroundStyle(.green)
+        case .failed:
+            Button("Retry", action: onPrepareInstall)
+                .buttonStyle(.borderedProminent)
+        }
+    }
+
+    private var consentBinding: Binding<Bool> {
+        Binding(
+            get: {
+                if case .awaitingConsent = installState {
+                    return true
+                }
+                return false
+            },
+            set: { isPresented in
+                if !isPresented {
+                    onCancelConsent()
+                }
+            }
+        )
     }
 
     private var formattedSize: String {
@@ -1004,6 +1131,26 @@ struct TranscriptionModelSettingRow: View {
         case .downloading:
             return .accentColor
         }
+    }
+
+    private func progressText(for progress: ModelDownloadProgress) -> String {
+        let phaseText: String
+        switch progress.phase {
+        case .preparing:
+            phaseText = "Preparing download"
+        case .downloading:
+            phaseText = "Downloading Russian model"
+        case .verifying:
+            phaseText = "Verifying model"
+        case .installing:
+            phaseText = "Installing model"
+        }
+
+        guard let fraction = progress.fractionCompleted else {
+            return phaseText
+        }
+
+        return "\(phaseText) \(Int((fraction * 100).rounded()))%"
     }
 }
 
