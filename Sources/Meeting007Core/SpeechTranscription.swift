@@ -39,10 +39,15 @@ public protocol SpeechTranscribing: Sendable {
     func stop(sessionID: UUID) async -> [TranscriptSegment]
 }
 
+public protocol TranscriptionFailureReporting: Sendable {
+    func lastFailure() async -> TranscriptionFailure?
+}
+
 public actor LocalSTTPipeline: SpeechChunkConsumer {
     private let transcriber: any SpeechTranscribing
     private var activeSessionID: UUID?
     private var transcript: MeetingTranscript?
+    private var lastTranscriptionFailure: TranscriptionFailure?
 
     public init(transcriber: any SpeechTranscribing) {
         self.transcriber = transcriber
@@ -54,11 +59,15 @@ public actor LocalSTTPipeline: SpeechChunkConsumer {
         guard result == .ready else {
             activeSessionID = nil
             transcript = nil
+            if case let .unavailable(failure) = result {
+                lastTranscriptionFailure = failure
+            }
             return result
         }
 
         activeSessionID = config.sessionID
         transcript = MeetingTranscript(meetingID: config.sessionID)
+        lastTranscriptionFailure = nil
         return result
     }
 
@@ -69,6 +78,7 @@ public actor LocalSTTPipeline: SpeechChunkConsumer {
         }
 
         let updates = await transcriber.receive(chunk)
+        await refreshLastFailure()
         for update in updates where update.meetingID == chunk.sessionID {
             transcript?.upsert(update)
         }
@@ -83,6 +93,7 @@ public actor LocalSTTPipeline: SpeechChunkConsumer {
         }
 
         let finalUpdates = await transcriber.stop(sessionID: sessionID)
+        await refreshLastFailure()
         for update in finalUpdates where update.meetingID == sessionID {
             transcript?.upsert(update)
         }
@@ -93,6 +104,17 @@ public actor LocalSTTPipeline: SpeechChunkConsumer {
 
     public func visibleSegments() -> [TranscriptSegment] {
         transcript?.segments ?? []
+    }
+
+    public func lastFailure() -> TranscriptionFailure? {
+        lastTranscriptionFailure
+    }
+
+    private func refreshLastFailure() async {
+        guard let reporter = transcriber as? any TranscriptionFailureReporting else {
+            return
+        }
+        lastTranscriptionFailure = await reporter.lastFailure()
     }
 }
 

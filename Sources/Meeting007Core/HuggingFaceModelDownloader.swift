@@ -6,17 +6,26 @@ public struct HuggingFaceWhisperModelPolicy: Equatable, Sendable {
     public let revision: String
     public let folderName: String
     public let requiredEntries: [String]
+    public let tokenizerRepositoryID: String
+    public let tokenizerRevision: String
+    public let requiredTokenizerFiles: [String]
 
     public init(
         repositoryID: String,
         revision: String,
         folderName: String,
-        requiredEntries: [String]
+        requiredEntries: [String],
+        tokenizerRepositoryID: String,
+        tokenizerRevision: String,
+        requiredTokenizerFiles: [String]
     ) {
         self.repositoryID = repositoryID
         self.revision = revision
         self.folderName = folderName
         self.requiredEntries = requiredEntries
+        self.tokenizerRepositoryID = tokenizerRepositoryID
+        self.tokenizerRevision = tokenizerRevision
+        self.requiredTokenizerFiles = requiredTokenizerFiles
     }
 
     public static let defaultRussian = HuggingFaceWhisperModelPolicy(
@@ -29,6 +38,12 @@ public struct HuggingFaceWhisperModelPolicy: Equatable, Sendable {
             "TextDecoder.mlmodelc",
             "config.json",
             "generation_config.json"
+        ],
+        tokenizerRepositoryID: "openai/whisper-large-v3",
+        tokenizerRevision: "main",
+        requiredTokenizerFiles: [
+            "tokenizer.json",
+            "tokenizer_config.json"
         ]
     )
 }
@@ -48,7 +63,14 @@ public struct RemoteModelFile: Equatable, Sendable {
 }
 
 public protocol HuggingFaceModelRepository: Sendable {
+    func listFiles(repositoryID: String, revision: String) async throws -> [RemoteModelFile]
     func listFiles(for policy: HuggingFaceWhisperModelPolicy) async throws -> [RemoteModelFile]
+}
+
+public extension HuggingFaceModelRepository {
+    func listFiles(for policy: HuggingFaceWhisperModelPolicy) async throws -> [RemoteModelFile] {
+        try await listFiles(repositoryID: policy.repositoryID, revision: policy.revision)
+    }
 }
 
 public protocol ModelFileFetching: Sendable {
@@ -85,8 +107,13 @@ public struct HuggingFaceModelDownloader: ModelDownloading {
             expectedBytes: Int64(request.expectedBytes)
         ))
 
-        let remoteFiles = try await repository.listFiles(for: modelPolicy)
-        let selectedFiles = try validate(remoteFiles, for: modelPolicy)
+        let remoteModelFiles = try await repository.listFiles(for: modelPolicy)
+        let remoteTokenizerFiles = try await repository.listFiles(
+            repositoryID: modelPolicy.tokenizerRepositoryID,
+            revision: modelPolicy.tokenizerRevision
+        )
+        let selectedFiles = try validateModelFiles(remoteModelFiles, for: modelPolicy)
+            + validateTokenizerFiles(remoteTokenizerFiles, for: modelPolicy)
         let expectedBytes = selectedFiles.reduce(Int64(0)) { $0 + $1.size }
         let stagingDirectory = stagingDirectory(for: request)
         try prepareStagingDirectory(stagingDirectory)
@@ -97,7 +124,7 @@ public struct HuggingFaceModelDownloader: ModelDownloading {
 
             for file in selectedFiles {
                 try Task.checkCancellation()
-                let relativePath = relativeModelPath(for: file.path)
+                let relativePath = relativeInstallPath(for: file.path)
                 guard LocalModelPathValidator.isSafeRelativePath(relativePath) else {
                     throw ModelInstallFailure.unsupportedRepositoryLayout
                 }
@@ -158,7 +185,7 @@ public struct HuggingFaceModelDownloader: ModelDownloading {
 
     public func cancel(requestID: UUID) async {}
 
-    private func validate(
+    private func validateModelFiles(
         _ files: [RemoteModelFile],
         for policy: HuggingFaceWhisperModelPolicy
     ) throws -> [RemoteModelFile] {
@@ -188,6 +215,24 @@ public struct HuggingFaceModelDownloader: ModelDownloading {
         return modelFiles
     }
 
+    private func validateTokenizerFiles(
+        _ files: [RemoteModelFile],
+        for policy: HuggingFaceWhisperModelPolicy
+    ) throws -> [RemoteModelFile] {
+        let tokenizerFiles = files
+            .filter { policy.requiredTokenizerFiles.contains($0.path) }
+            .filter { LocalModelPathValidator.isSafeRelativePath($0.path) }
+            .sorted { $0.path < $1.path }
+
+        for requiredFile in policy.requiredTokenizerFiles {
+            guard tokenizerFiles.contains(where: { $0.path == requiredFile }) else {
+                throw ModelInstallFailure.unsupportedRepositoryLayout
+            }
+        }
+
+        return tokenizerFiles
+    }
+
     private func stagingDirectory(for request: ModelDownloadRequest) -> URL {
         request.destinationDirectory
             .deletingLastPathComponent()
@@ -203,8 +248,12 @@ public struct HuggingFaceModelDownloader: ModelDownloading {
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
-    private func relativeModelPath(for remotePath: String) -> String {
-        String(remotePath.dropFirst(modelPolicy.folderName.count + 1))
+    private func relativeInstallPath(for remotePath: String) -> String {
+        let modelPrefix = modelPolicy.folderName + "/"
+        if remotePath.hasPrefix(modelPrefix) {
+            return String(remotePath.dropFirst(modelPrefix.count))
+        }
+        return remotePath
     }
 
     private func localFileSize(at fileURL: URL) throws -> Int64 {
@@ -241,7 +290,11 @@ public struct URLSessionHuggingFaceModelRepository: HuggingFaceModelRepository {
     }
 
     public func listFiles(for policy: HuggingFaceWhisperModelPolicy) async throws -> [RemoteModelFile] {
-        guard let url = URL(string: "\(endpoint.absoluteString)/api/models/\(policy.repositoryID)?revision=\(policy.revision)&blobs=true") else {
+        try await listFiles(repositoryID: policy.repositoryID, revision: policy.revision)
+    }
+
+    public func listFiles(repositoryID: String, revision: String) async throws -> [RemoteModelFile] {
+        guard let url = URL(string: "\(endpoint.absoluteString)/api/models/\(repositoryID)?revision=\(revision)&blobs=true") else {
             throw ModelInstallFailure.downloadSourceUnavailable
         }
 
@@ -261,8 +314,8 @@ public struct URLSessionHuggingFaceModelRepository: HuggingFaceModelRepository {
                     size: size,
                     sha256: sibling.lfs?.oid,
                     downloadURL: resolveURL(
-                        repositoryID: policy.repositoryID,
-                        revision: policy.revision,
+                        repositoryID: repositoryID,
+                        revision: revision,
                         filePath: sibling.rfilename
                     )
                 )

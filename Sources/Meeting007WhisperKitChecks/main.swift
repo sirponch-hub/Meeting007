@@ -11,6 +11,7 @@ struct Meeting007WhisperKitChecks {
         await checkWhisperKitAdapterBuildsEngineFromVerifiedModelDirectory()
         await checkWhisperKitAdapterDoesNotBuildEngineForMissingModelDirectory()
         await checkProductionWhisperKitPipelineDoesNotEmitFakeTextWhenModelMissing()
+        await checkWhisperKitRuntimeFailureIsReported()
         await checkWhisperKitAdapterMapsResultToTranscriptSegment()
         await checkWhisperKitFailureDoesNotBreakFakeRussianSTT()
         checkWhisperKitAdapterDoesNotPersistSpeechChunks()
@@ -106,6 +107,25 @@ struct Meeting007WhisperKitChecks {
             message: "The Russian transcription model is not installed on this Mac."
         )), "Production WhisperKit pipeline must report missing local model.")
         require(segments.isEmpty, "Production WhisperKit pipeline must not emit fake transcript text when the model is missing.")
+    }
+
+    private static func checkWhisperKitRuntimeFailureIsReported() async {
+        let adapter = WhisperKitSpeechTranscriber(
+            modelManager: FakeLocalSTTModelManager(availability: .ready),
+            engine: ThrowingWhisperKitTranscriptionEngine()
+        )
+        let sessionID = UUID()
+
+        let start = await adapter.start(config: STTSessionConfig(sessionID: sessionID))
+        let segments = await adapter.receive(makeSpeechChunk(sessionID: sessionID, startedAt: 0, duration: 1))
+        let failure = await adapter.lastFailure()
+
+        require(start == .ready, "Runtime failure check must start with a ready model.")
+        require(segments.isEmpty, "Runtime transcription failure should not emit misleading transcript text.")
+        require(failure == TranscriptionFailure(
+            code: "local_stt_runtime_failed",
+            message: "Local transcription stopped unexpectedly."
+        ), "Runtime transcription failure must be observable by the app.")
     }
 
     private static func checkWhisperKitAdapterMapsResultToTranscriptSegment() async {
@@ -238,5 +258,14 @@ private struct PreparedSpyWhisperKitEngine: WhisperKitTranscriptionEngine {
 
     func transcribe(_ chunk: SpeechChunk, language: String) async throws -> String {
         result
+    }
+}
+
+private struct ThrowingWhisperKitTranscriptionEngine: WhisperKitTranscriptionEngine {
+    func transcribe(_ chunk: SpeechChunk, language: String) async throws -> String {
+        throw TranscriptionFailure(
+            code: "test_runtime_failure",
+            message: "Synthetic runtime failure."
+        )
     }
 }

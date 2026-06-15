@@ -53,6 +53,7 @@ struct Meeting007CoreChecks {
         await checkExistingModelWithoutInstallManifestRequiresInstall()
         await checkVerifiedModelDirectoryReturnsReadyPath()
         await checkVerifiedModelDirectoryRejectsCorruptModelFiles()
+        await checkVerifiedModelDirectoryRejectsModelWithoutTokenizer()
         await checkInstallerPublishesProgress()
         await checkSuccessfulInstallReturnsReadyAvailability()
         await checkHuggingFaceDownloaderUsesPinnedRussianSource()
@@ -1026,6 +1027,41 @@ struct Meeting007CoreChecks {
         require(availability == .missing, "Model folder without install marker must not be treated as ready.")
     }
 
+    private static func checkVerifiedModelDirectoryRejectsModelWithoutTokenizer() async {
+        let modelFolder = temporaryModelFolder()
+        let store = LocalSTTModelStore(rootDirectory: modelFolder)
+        let preparedDirectory = modelFolder.appendingPathComponent("prepared-without-tokenizer", isDirectory: true)
+        let files = [
+            ("AudioEncoder.mlmodelc/weights.bin", Data("audio".utf8)),
+            ("MelSpectrogram.mlmodelc/weights.bin", Data("mel".utf8)),
+            ("TextDecoder.mlmodelc/weights.bin", Data("decoder".utf8)),
+            ("config.json", Data("{\"language\":\"ru\"}".utf8)),
+            ("generation_config.json", Data("{\"task\":\"transcribe\"}".utf8))
+        ]
+        let manifests = writeModelFiles(files, into: preparedDirectory)
+        do {
+            _ = try await store.markInstalled(DownloadedModelArtifact(
+                policy: .defaultRussian,
+                localURL: preparedDirectory,
+                repositoryID: HuggingFaceWhisperModelPolicy.defaultRussian.repositoryID,
+                revision: HuggingFaceWhisperModelPolicy.defaultRussian.revision,
+                folderName: HuggingFaceWhisperModelPolicy.defaultRussian.folderName,
+                actualBytes: manifests.reduce(Int64(0)) { $0 + $1.size },
+                files: manifests
+            ))
+        } catch {
+            require(false, "Model without tokenizer fixture must be markable before verification rejects it: \(error)")
+        }
+
+        let result = await store.verifiedModelDirectory(for: .defaultRussian)
+
+        if case .unavailable(let availability) = result {
+            require(availability != .ready, "Verified model directory must reject installs without tokenizer files.")
+        } else {
+            require(false, "Model without tokenizer files must not return a usable model path.")
+        }
+    }
+
     private static func checkVerifiedModelDirectoryReturnsReadyPath() async {
         let modelFolder = temporaryModelFolder()
         let store = LocalSTTModelStore(rootDirectory: modelFolder)
@@ -1124,7 +1160,9 @@ struct Meeting007CoreChecks {
         }
 
         let requestedPolicies = await repository.requestedPolicies()
+        let requestedRepositories = await repository.requestedRepositories()
         require(requestedPolicies == [.defaultRussian], "Downloader must request the pinned HuggingFace Russian model source.")
+        require(requestedRepositories.contains { $0.repositoryID == "openai/whisper-large-v3" }, "Downloader must also request the local Whisper tokenizer source.")
         require(HuggingFaceWhisperModelPolicy.defaultRussian.repositoryID == "argmaxinc/whisperkit-coreml", "Downloader must use the expected HuggingFace repository.")
         require(HuggingFaceWhisperModelPolicy.defaultRussian.folderName == "openai_whisper-large-v3-v20240930_626MB", "Downloader must use the expected WhisperKit CoreML folder.")
         require(!HuggingFaceWhisperModelPolicy.defaultRussian.revision.isEmpty, "Downloader must pin a HuggingFace revision.")
@@ -1166,6 +1204,7 @@ struct Meeting007CoreChecks {
         require(manifest.contains("\"revision\"") && manifest.contains("7235bbd"), "install.json must record the pinned HuggingFace revision.")
         require(manifest.contains("\"source\"") && manifest.contains("explicit-user-consent"), "install.json must record explicit user consent as the source.")
         require(manifest.contains("\"sha256\""), "install.json must record per-file checksums.")
+        require(manifest.contains("tokenizer.json"), "install.json must record tokenizer files needed by WhisperKit runtime.")
     }
 
     private static func checkHuggingFaceDownloaderPublishesStreamingProgress() async {
@@ -1776,7 +1815,9 @@ struct Meeting007CoreChecks {
             ("MelSpectrogram.mlmodelc/weights.bin", Data("mel".utf8)),
             ("TextDecoder.mlmodelc/weights.bin", Data("decoder".utf8)),
             ("config.json", Data("{\"language\":\"ru\"}".utf8)),
-            ("generation_config.json", Data("{\"task\":\"transcribe\"}".utf8))
+            ("generation_config.json", Data("{\"task\":\"transcribe\"}".utf8)),
+            ("tokenizer.json", Data("{\"version\":\"1.0\"}".utf8)),
+            ("tokenizer_config.json", Data("{\"model_max_length\":448}".utf8))
         ]
         let manifests = writeModelFiles(files, into: preparedDirectory)
         return DownloadedModelArtifact(
@@ -1791,8 +1832,13 @@ struct Meeting007CoreChecks {
     }
 
     private struct HuggingFaceFixture {
-        let remoteFiles: [RemoteModelFile]
+        let modelFiles: [RemoteModelFile]
+        let tokenizerFiles: [RemoteModelFile]
         let dataByPath: [String: Data]
+
+        var remoteFiles: [RemoteModelFile] {
+            modelFiles + tokenizerFiles
+        }
     }
 
     private static func huggingFaceFixture(
@@ -1800,7 +1846,7 @@ struct Meeting007CoreChecks {
         omittingRequiredEntry: String? = nil
     ) -> HuggingFaceFixture {
         let folder = HuggingFaceWhisperModelPolicy.defaultRussian.folderName
-        let files = [
+        let modelFiles = [
             ("\(folder)/AudioEncoder.mlmodelc/weights.bin", Data("audio".utf8)),
             ("\(folder)/MelSpectrogram.mlmodelc/weights.bin", Data("mel".utf8)),
             ("\(folder)/TextDecoder.mlmodelc/weights.bin", Data("decoder".utf8)),
@@ -1813,8 +1859,17 @@ struct Meeting007CoreChecks {
             }
             return !path.contains("/\(omittingRequiredEntry)/") && !path.hasSuffix("/\(omittingRequiredEntry)")
         }
-        let dataByPath = Dictionary(uniqueKeysWithValues: files)
-        let remoteFiles = files.map { path, data in
+        let tokenizerFiles = [
+            ("tokenizer.json", Data("{\"version\":\"1.0\"}".utf8)),
+            ("tokenizer_config.json", Data("{\"model_max_length\":448}".utf8))
+        ].filter { path, _ in
+            guard let omittingRequiredEntry else {
+                return true
+            }
+            return path != omittingRequiredEntry
+        }
+        let dataByPath = Dictionary(uniqueKeysWithValues: modelFiles + tokenizerFiles)
+        let remoteModelFiles = modelFiles.map { path, data in
             RemoteModelFile(
                 path: path,
                 size: Int64(data.count),
@@ -1822,7 +1877,19 @@ struct Meeting007CoreChecks {
                 downloadURL: URL(string: "https://huggingface.co/\(path)")!
             )
         }
-        return HuggingFaceFixture(remoteFiles: remoteFiles, dataByPath: dataByPath)
+        let remoteTokenizerFiles = tokenizerFiles.map { path, data in
+            RemoteModelFile(
+                path: path,
+                size: Int64(data.count),
+                sha256: checksumOverride ?? sha256Hex(data),
+                downloadURL: URL(string: "https://huggingface.co/\(path)")!
+            )
+        }
+        return HuggingFaceFixture(
+            modelFiles: remoteModelFiles,
+            tokenizerFiles: remoteTokenizerFiles,
+            dataByPath: dataByPath
+        )
     }
 
     private static func writeModelFiles(
@@ -1977,20 +2044,40 @@ private actor FakeMicrophoneCaptureDriver: MicrophoneCaptureDriver {
 }
 
 private actor FakeHuggingFaceRepository: HuggingFaceModelRepository {
-    private let files: [RemoteModelFile]
+    private let filesByRepositoryID: [String: [RemoteModelFile]]
     private var policies: [HuggingFaceWhisperModelPolicy] = []
+    private var repositoryRequests: [(repositoryID: String, revision: String)] = []
 
     init(files: [RemoteModelFile]) {
-        self.files = files
+        self.filesByRepositoryID = [
+            HuggingFaceWhisperModelPolicy.defaultRussian.repositoryID: files,
+            HuggingFaceWhisperModelPolicy.defaultRussian.tokenizerRepositoryID: files
+        ]
+    }
+
+    init(modelFiles: [RemoteModelFile], tokenizerFiles: [RemoteModelFile]) {
+        self.filesByRepositoryID = [
+            HuggingFaceWhisperModelPolicy.defaultRussian.repositoryID: modelFiles,
+            HuggingFaceWhisperModelPolicy.defaultRussian.tokenizerRepositoryID: tokenizerFiles
+        ]
+    }
+
+    func listFiles(repositoryID: String, revision: String) async throws -> [RemoteModelFile] {
+        repositoryRequests.append((repositoryID, revision))
+        return filesByRepositoryID[repositoryID] ?? []
     }
 
     func listFiles(for policy: HuggingFaceWhisperModelPolicy) async throws -> [RemoteModelFile] {
         policies.append(policy)
-        return files
+        return try await listFiles(repositoryID: policy.repositoryID, revision: policy.revision)
     }
 
     func requestedPolicies() -> [HuggingFaceWhisperModelPolicy] {
         policies
+    }
+
+    func requestedRepositories() -> [(repositoryID: String, revision: String)] {
+        repositoryRequests
     }
 }
 

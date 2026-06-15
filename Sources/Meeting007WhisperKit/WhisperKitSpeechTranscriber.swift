@@ -90,12 +90,13 @@ public struct LocalWhisperKitTranscriptionEngine: WhisperKitTranscriptionEngine 
     public func transcribe(_ chunk: SpeechChunk, language: String) async throws -> String {
         let whisperKit = try await makeWhisperKit()
         let decodeOptions = DecodingOptions(language: language)
-        let results = await whisperKit.transcribe(
+        let results = await whisperKit.transcribeWithResults(
             audioArrays: [Array(chunk.samples)],
             decodeOptions: decodeOptions
         )
 
-        return results.first??.first?.text ?? ""
+        let firstResult = try results.first?.get()
+        return firstResult?.first?.text ?? ""
     }
 
     private func makeWhisperKit() async throws -> WhisperKit {
@@ -111,7 +112,7 @@ public struct LocalWhisperKitTranscriptionEngine: WhisperKitTranscriptionEngine 
     }
 }
 
-public actor WhisperKitSpeechTranscriber: SpeechTranscribing {
+public actor WhisperKitSpeechTranscriber: SpeechTranscribing, TranscriptionFailureReporting {
     private let modelManager: any LocalSTTModelManaging
     private let modelPathProvider: (any LocalSTTModelPathProviding)?
     private let configuration: WhisperKitAdapterConfiguration
@@ -120,6 +121,7 @@ public actor WhisperKitSpeechTranscriber: SpeechTranscribing {
     private var activeEngine: (any WhisperKitTranscriptionEngine)?
     private var activeConfig: STTSessionConfig?
     private var downloadAttempts = 0
+    private var runtimeFailure: TranscriptionFailure?
 
     public init(
         modelManager: any LocalSTTModelManaging,
@@ -150,10 +152,12 @@ public actor WhisperKitSpeechTranscriber: SpeechTranscribing {
     public func start(config: STTSessionConfig) async -> TranscriptionStartResult {
         guard config.language == configuration.language else {
             activeConfig = nil
-            return .unavailable(TranscriptionFailure(
+            let failure = TranscriptionFailure(
                 code: "local_stt_language_unsupported",
                 message: "The local WhisperKit adapter is configured for Russian transcription."
-            ))
+            )
+            runtimeFailure = failure
+            return .unavailable(failure)
         }
 
         if let modelPathProvider {
@@ -163,29 +167,38 @@ public actor WhisperKitSpeechTranscriber: SpeechTranscribing {
                 guard let engineFactory else {
                     activeConfig = nil
                     activeEngine = nil
-                    return .unavailable(TranscriptionFailure(
+                    let failure = TranscriptionFailure(
                         code: "local_stt_engine_unavailable",
                         message: "Local transcription could not start."
-                    ))
+                    )
+                    runtimeFailure = failure
+                    return .unavailable(failure)
                 }
                 let engine = engineFactory(modelDirectory)
                 do {
                     try await engine.prepare()
                     activeEngine = engine
                     activeConfig = config
+                    runtimeFailure = nil
                     return .ready
                 } catch {
                     activeEngine = nil
                     activeConfig = nil
-                    return .unavailable(TranscriptionFailure(
+                    let failure = TranscriptionFailure(
                         code: "local_stt_engine_unavailable",
                         message: "Local transcription could not start."
-                    ))
+                    )
+                    runtimeFailure = failure
+                    return .unavailable(failure)
                 }
             case .unavailable(let availability):
                 activeEngine = nil
                 activeConfig = nil
-                return unavailableResult(for: availability)
+                let result = unavailableResult(for: availability)
+                if case let .unavailable(failure) = result {
+                    runtimeFailure = failure
+                }
+                return result
             }
         }
 
@@ -197,18 +210,25 @@ public actor WhisperKitSpeechTranscriber: SpeechTranscribing {
             } catch {
                 activeConfig = nil
                 activeEngine = nil
-                return .unavailable(TranscriptionFailure(
+                let failure = TranscriptionFailure(
                     code: "local_stt_engine_unavailable",
                     message: "Local transcription could not start."
-                ))
+                )
+                runtimeFailure = failure
+                return .unavailable(failure)
             }
             activeEngine = fixedEngine
             activeConfig = config
+            runtimeFailure = nil
             return .ready
         case .missing, .invalid, .downloading, .downloadFailed:
             activeEngine = nil
             activeConfig = nil
-            return unavailableResult(for: availability)
+            let result = unavailableResult(for: availability)
+            if case let .unavailable(failure) = result {
+                runtimeFailure = failure
+            }
+            return result
         }
     }
 
@@ -242,6 +262,10 @@ public actor WhisperKitSpeechTranscriber: SpeechTranscribing {
                 )
             ]
         } catch {
+            runtimeFailure = TranscriptionFailure(
+                code: "local_stt_runtime_failed",
+                message: "Local transcription stopped unexpectedly."
+            )
             return []
         }
     }
@@ -259,6 +283,10 @@ public actor WhisperKitSpeechTranscriber: SpeechTranscribing {
 
     public func automaticDownloadAttempts() -> Int {
         downloadAttempts
+    }
+
+    public func lastFailure() -> TranscriptionFailure? {
+        runtimeFailure
     }
 
     private func speakerLane(for lane: CaptureLane) -> SpeakerLane {

@@ -412,7 +412,19 @@ private struct LocalSTTModelInstallMarker: Codable {
     let installedAt: Date
 
     var hasVerifiedManifest: Bool {
-        fileCount == files.count && !files.isEmpty
+        let requiredFiles = Set([
+            "config.json",
+            "generation_config.json",
+            "tokenizer.json",
+            "tokenizer_config.json"
+        ])
+        let filePaths = Set(files.map(\.path))
+        return fileCount == files.count
+            && !files.isEmpty
+            && requiredFiles.isSubset(of: filePaths)
+            && files.contains { $0.path.hasPrefix("AudioEncoder.mlmodelc/") }
+            && files.contains { $0.path.hasPrefix("MelSpectrogram.mlmodelc/") }
+            && files.contains { $0.path.hasPrefix("TextDecoder.mlmodelc/") }
     }
 
     func matches(_ policy: WhisperModelPolicy) -> Bool {

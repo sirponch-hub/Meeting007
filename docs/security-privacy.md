@@ -55,6 +55,7 @@ Current local STT model policy:
 - Model installer state is separate from meeting recording and transcript export; it may write model markers/files only under app-owned Application Support model storage.
 - The production installer may contact HuggingFace only after explicit user consent and only to fetch model metadata/files for `argmaxinc/whisperkit-coreml/openai_whisper-large-v3-v20240930_626MB` at the pinned revision.
 - Downloaded model files are staged locally, verified with required-file checks and SHA-256, then promoted to the final local model folder. `install.json` is written last and is required for future offline readiness checks.
+- Model installation also fetches the local Whisper tokenizer files required for text decoding. A CoreML-only model folder is treated as invalid instead of being shown as ready.
 - The app recording flow uses the WhisperKit adapter only with a verified local model directory from `LocalSTTModelStore`.
 - The WhisperKit adapter target compiles against the upstream local SDK, but Meeting007 does not call automatic model download from the adapter and keeps `download: false`.
 - Meeting007 does not bundle Whisper model files and does not add a Meeting007 cloud transcription path.

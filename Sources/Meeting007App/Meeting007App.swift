@@ -479,6 +479,10 @@ final class RecordingShellViewModel: ObservableObject {
                 }
 
                 self.previewSegments = await self.sttPipeline.visibleSegments()
+                if let failure = await self.sttPipeline.lastFailure() {
+                    self.transcriptionStatusText = "Recording audio locally; transcription unavailable"
+                    self.errorMessage = failure.message
+                }
             }
         }
     }
