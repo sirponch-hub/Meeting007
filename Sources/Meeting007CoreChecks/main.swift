@@ -45,6 +45,10 @@ struct Meeting007CoreChecks {
         checkDefaultVADConfigurationTargetsLiveMeetingSpeech()
         checkVADChunksContinuousFastSpeechForLiveMeetings()
         checkVADOverlapsContinuousSpeechChunksToProtectBoundaryWords()
+        checkRollingAudioBufferKeepsBoundedRecentWindow()
+        await checkRollingStreamingSessionProducesPartialBeforeVADFinalChunk()
+        await checkRollingStreamingSessionRejectsWrongSessionAndClearsOnStop()
+        checkLocalAgreementStabilizerCommitsOnlyStablePrefix()
         await checkRuntimeAudioChunksDoNotPersistIntoMarkdown()
         await checkLocalSTTDefaultsToRussian()
         checkWhisperModelPolicyDefaultsToRussianPinnedModel()
@@ -910,6 +914,91 @@ struct Meeting007CoreChecks {
         require(emitted[1].duration == 1, "The next continuous speech chunk must include boundary context plus new speech.")
         let flushed = vad.end(sessionID: sessionID)
         require(flushed.count == 1, "Continuous speech overlap must keep the next active window open for final flush.")
+    }
+
+    private static func checkRollingAudioBufferKeepsBoundedRecentWindow() {
+        let sessionID = UUID()
+        var buffer = RollingAudioBuffer(capacityDuration: 2)
+
+        for index in 0..<4 {
+            buffer.append(makeCapturedAudioChunk(
+                sessionID: sessionID,
+                startedAt: Double(index),
+                amplitude: 0.2,
+                duration: 1
+            ))
+        }
+
+        let window = buffer.recentWindow(sessionID: sessionID, lane: .mic, duration: 2)
+        require(buffer.bufferedDuration(sessionID: sessionID, lane: .mic) == 2, "Rolling buffer must retain only the bounded recent duration.")
+        require(window?.startedAt == 2, "Rolling window must start at the recent cutoff.")
+        require(window?.duration == 2, "Rolling window must expose the requested recent duration.")
+        require(window?.samples.count == 32_000, "Rolling window must keep only recent PCM samples.")
+
+        buffer.clear()
+        require(buffer.bufferedDuration(sessionID: sessionID, lane: .mic) == 0, "Rolling buffer must clear runtime PCM after Stop.")
+    }
+
+    private static func checkRollingStreamingSessionProducesPartialBeforeVADFinalChunk() async {
+        let sessionID = UUID()
+        var vad = VADSpeechChunker(configuration: .default)
+        let decoder = ScriptedRollingWindowDecoder(outputs: [
+            "быстрая речь продолжается"
+        ])
+        let streamingSession = RollingStreamingTranscriptionSession(
+            sessionID: sessionID,
+            bufferDuration: 30,
+            windowDuration: 20,
+            decoder: decoder
+        )
+
+        vad.begin(sessionID: sessionID)
+        for index in 0..<4 {
+            let chunk = makeCapturedAudioChunk(
+                sessionID: sessionID,
+                startedAt: Double(index) * 0.25,
+                amplitude: 0.2,
+                duration: 0.25
+            )
+            await streamingSession.receive(chunk)
+            let vadOutput = vad.receive(chunk)
+            require(vadOutput.isEmpty, "Current VAD path should not emit a final chunk during the first second of continuous speech.")
+        }
+
+        let update = try? await streamingSession.tick()
+        let receivedWindows = await decoder.receivedWindows()
+        require(update?.partialText == "быстрая речь продолжается", "Rolling streaming spike must produce visible partial text before the old final-chunk path.")
+        require(receivedWindows.first?.duration == 1, "Rolling decoder must receive the accumulated recent audio window.")
+    }
+
+    private static func checkRollingStreamingSessionRejectsWrongSessionAndClearsOnStop() async {
+        let sessionID = UUID()
+        let decoder = ScriptedRollingWindowDecoder(outputs: ["правильная сессия"])
+        let streamingSession = RollingStreamingTranscriptionSession(sessionID: sessionID, decoder: decoder)
+
+        await streamingSession.receive(makeCapturedAudioChunk(sessionID: UUID(), startedAt: 0, amplitude: 0.2))
+        let wrongSessionDuration = await streamingSession.bufferedDuration()
+        require(wrongSessionDuration == 0, "Rolling streaming spike must reject PCM for other sessions.")
+
+        await streamingSession.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0, amplitude: 0.2))
+        let activeSessionDuration = await streamingSession.bufferedDuration()
+        require(activeSessionDuration > 0, "Rolling streaming spike must keep active-session PCM in memory.")
+
+        await streamingSession.stop()
+        let stoppedDuration = await streamingSession.bufferedDuration()
+        require(stoppedDuration == 0, "Rolling streaming spike must clear runtime PCM on Stop.")
+    }
+
+    private static func checkLocalAgreementStabilizerCommitsOnlyStablePrefix() {
+        var stabilizer = LocalAgreementTranscriptStabilizer()
+
+        let first = stabilizer.observe("сегодня обсуждаем rolling buffer")
+        let second = stabilizer.observe("сегодня обсуждаем rolling buffer и качество")
+
+        require(first.committedText.isEmpty, "First rolling hypothesis must stay unstable partial text.")
+        require(first.partialText == "сегодня обсуждаем rolling buffer", "First rolling hypothesis must be visible as partial text.")
+        require(second.committedText == "сегодня обсуждаем rolling", "LocalAgreement must commit only the stable full-word prefix.")
+        require(second.partialText == "buffer и качество", "LocalAgreement must leave unstable suffix as partial text.")
     }
 
     private static func checkRuntimeAudioChunksDoNotPersistIntoMarkdown() async {
@@ -2196,6 +2285,35 @@ private actor RecordingSpeechChunkConsumer: SpeechChunkConsumer {
 
     func chunks() -> [SpeechChunk] {
         deliveredChunks
+    }
+}
+
+private actor ScriptedRollingWindowDecoder: RollingWindowTranscribing {
+    private var outputs: [String]
+    private var windows: [RollingAudioWindow] = []
+    private var prompts: [String] = []
+
+    init(outputs: [String]) {
+        self.outputs = outputs
+    }
+
+    func transcribe(window: RollingAudioWindow, prompt: String) async throws -> RollingTranscriptionHypothesis {
+        windows.append(window)
+        prompts.append(prompt)
+        let text = outputs.isEmpty ? "" : outputs.removeFirst()
+        return RollingTranscriptionHypothesis(
+            text: text,
+            windowStartedAt: window.startedAt,
+            windowEndedAt: window.startedAt + window.duration
+        )
+    }
+
+    func receivedWindows() -> [RollingAudioWindow] {
+        windows
+    }
+
+    func receivedPrompts() -> [String] {
+        prompts
     }
 }
 

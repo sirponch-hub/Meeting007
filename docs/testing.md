@@ -21,6 +21,7 @@ Required coverage:
 - Microphone recording lifecycle with fake capture: Start opens one mic lane, Stop closes it, late chunks are rejected, chunks remain session/lane/timing aware, selected microphone UID persists locally, sample-bearing PCM stays in memory, and microphone start failures surface stable user-facing errors.
 - Runtime-only audio behavior: PCM is downmixed/resampled to mono 16 kHz, runtime chunks do not create raw audio files, speech chunks are delivered to STT in sample-clock order without blocking capture, Stop drains queued speech chunks, and Markdown export does not reference audio artifacts or sample metadata.
 - VAD behavior: silence-only chunks are suppressed, speech-positive chunks create `SpeechChunk` utterances, short pauses stay inside one utterance, long silence separates utterances, continuous speech chunks include boundary overlap to reduce dropped words, and Stop flushes open speech deterministically.
+- Streaming transcription spike behavior: rolling audio buffers keep only bounded in-memory PCM, reject wrong-session chunks, clear on Stop, produce rolling partial hypotheses before the current VAD final-chunk path, and commit only stable full-word prefixes through LocalAgreement-style checks.
 - Local STT pipeline behavior: Russian default configuration, `SpeechChunk` input, mic-to-`Me` lane mapping, partial-to-final updates with stable segment identity, stopped-session chunk rejection, missing-model recoverable state, and exportability of final STT segments.
 - Local STT model manager behavior: pinned Russian model policy, missing/invalid/downloading/download-failed recoverable states, verified local model directory only after manifest/file/SHA checks, ready-model pass-through, explicit prepared-artifact install boundary, and no automatic model download from core checks.
 - Local STT model installer behavior: no download before explicit consent, cancel consent without side effects, confirmed install starts one controlled downloader request, progress/failure states are visible, successful install marks model readiness, existing verified installs skip download, installer failure leaves fake STT usable, and no raw audio artifacts are created.
@@ -41,6 +42,7 @@ Use deterministic fixtures:
 - Synthetic PCM frames for VAD and sample-clock timing.
 - Fake local STT engine returning known partial and final segments.
 - Fake WhisperKit transcription engine for adapter contract checks without model files.
+- Fake rolling-window decoder for streaming-partial spike checks before real WhisperKit rolling decode is wired.
 - Fake HuggingFace repository and file fetcher for installer checks without network or a 626 MB model download.
 - Optional local WhisperKit model path for manual spike proof; ordinary checks must not require downloading or committing model files.
 - Temporary SQLite database.
