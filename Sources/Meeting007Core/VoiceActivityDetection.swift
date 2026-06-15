@@ -5,21 +5,25 @@ public struct VADSpeechChunker: Sendable {
         public let speechLevelThreshold: Float
         public let trailingSilenceDuration: TimeInterval
         public let maximumSpeechDuration: TimeInterval
+        public let boundaryOverlapDuration: TimeInterval
 
         public init(
             speechLevelThreshold: Float,
             trailingSilenceDuration: TimeInterval,
-            maximumSpeechDuration: TimeInterval
+            maximumSpeechDuration: TimeInterval,
+            boundaryOverlapDuration: TimeInterval = 0
         ) {
             self.speechLevelThreshold = speechLevelThreshold
             self.trailingSilenceDuration = trailingSilenceDuration
             self.maximumSpeechDuration = maximumSpeechDuration
+            self.boundaryOverlapDuration = boundaryOverlapDuration
         }
 
         public static let `default` = Configuration(
             speechLevelThreshold: 0.01,
             trailingSilenceDuration: 0.4,
-            maximumSpeechDuration: 5
+            maximumSpeechDuration: 5,
+            boundaryOverlapDuration: 0.5
         )
     }
 
@@ -99,8 +103,9 @@ public struct VADSpeechChunker: Sendable {
         activeWindows[chunk.lane] = window
 
         if window.lastSpeechEndAt - window.startedAt >= configuration.maximumSpeechDuration {
-            activeWindows[chunk.lane] = nil
-            return [finalize(window)]
+            let finalized = finalize(window)
+            activeWindows[chunk.lane] = overlappedWindow(afterHardCutting: window)
+            return [finalized]
         }
 
         return []
@@ -130,6 +135,34 @@ public struct VADSpeechChunker: Sendable {
             sampleRate: window.sampleRate,
             samples: window.samples,
             isFinalInUtterance: true
+        )
+    }
+
+    private func overlappedWindow(afterHardCutting window: ActiveSpeechWindow) -> ActiveSpeechWindow? {
+        let overlapDuration = min(
+            max(configuration.boundaryOverlapDuration, 0),
+            max(window.lastSpeechEndAt - window.startedAt, 0)
+        )
+        guard overlapDuration > 0, window.sampleRate > 0, !window.samples.isEmpty else {
+            return nil
+        }
+
+        let overlapSampleCount = min(
+            window.samples.count,
+            max(1, Int((overlapDuration * window.sampleRate).rounded()))
+        )
+        let overlapSamples = ContiguousArray(window.samples.suffix(overlapSampleCount))
+        let actualOverlapDuration = Double(overlapSampleCount) / window.sampleRate
+        let overlapStart = max(window.startedAt, window.lastSpeechEndAt - actualOverlapDuration)
+
+        return ActiveSpeechWindow(
+            sessionID: window.sessionID,
+            lane: window.lane,
+            startedAt: overlapStart,
+            lastSpeechEndAt: window.lastSpeechEndAt,
+            sampleRate: window.sampleRate,
+            samples: overlapSamples,
+            trailingSilence: 0
         )
     }
 

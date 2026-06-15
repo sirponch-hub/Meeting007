@@ -35,6 +35,7 @@ struct Meeting007CoreChecks {
         checkRuntimeAudioNormalizerDownmixesAndResamplesToMono16k()
         await checkRuntimeAudioConsumerAcceptsOnlyActiveSampleBearingChunks()
         await checkRuntimeAudioConsumerDoesNotBlockCaptureOnSlowTranscription()
+        await checkRuntimeAudioConsumerDeliversSpeechChunksInOrder()
         await checkRuntimeAudioConsumerFlushesSpeechBeforeEndReturns()
         checkVADSuppressesQuietFrames()
         checkVADEmitsSpeechChunkForSpeechFrames()
@@ -43,6 +44,7 @@ struct Meeting007CoreChecks {
         checkVADFlushFinalizesOpenSpeechOnStop()
         checkDefaultVADConfigurationTargetsLiveMeetingSpeech()
         checkVADChunksContinuousFastSpeechForLiveMeetings()
+        checkVADOverlapsContinuousSpeechChunksToProtectBoundaryWords()
         await checkRuntimeAudioChunksDoNotPersistIntoMarkdown()
         await checkLocalSTTDefaultsToRussian()
         checkWhisperModelPolicyDefaultsToRussianPinnedModel()
@@ -748,6 +750,25 @@ struct Meeting007CoreChecks {
         await consumer.end(sessionID: sessionID)
     }
 
+    private static func checkRuntimeAudioConsumerDeliversSpeechChunksInOrder() async {
+        let sessionID = UUID()
+        let recorder = DelayedFirstSpeechChunkConsumer()
+        let consumer = RuntimeOnlyAudioChunkConsumer(
+            speechChunkConsumer: recorder,
+            vadConfiguration: testVADConfiguration()
+        )
+
+        await consumer.begin(sessionID: sessionID)
+        await consumer.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0, amplitude: 0.2))
+        await consumer.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0.2, amplitude: 0.001))
+        await consumer.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0.4, amplitude: 0.2))
+        await consumer.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0.6, amplitude: 0.001))
+        await consumer.end(sessionID: sessionID)
+
+        let starts = await recorder.startedAtValues()
+        require(starts == [0, 0.4], "Runtime consumer must deliver STT chunks in sample-clock order even when the first transcription is slow.")
+    }
+
     private static func checkRuntimeAudioConsumerFlushesSpeechBeforeEndReturns() async {
         let sessionID = UUID()
         let recorder = RecordingSpeechChunkConsumer()
@@ -862,6 +883,33 @@ struct Meeting007CoreChecks {
         require(!emitted.isEmpty, "VAD must emit a speech chunk during continuous fast speech without waiting for a long pause.")
         require(emitted.first?.duration ?? 0 <= 6, "Continuous speech chunks must stay short enough for live transcription.")
         require(emitted.first?.samples.isEmpty == false, "Continuous speech chunks must carry PCM samples to STT.")
+    }
+
+    private static func checkVADOverlapsContinuousSpeechChunksToProtectBoundaryWords() {
+        var vad = VADSpeechChunker(configuration: VADSpeechChunker.Configuration(
+            speechLevelThreshold: 0.05,
+            trailingSilenceDuration: 0.15,
+            maximumSpeechDuration: 1,
+            boundaryOverlapDuration: 0.25
+        ))
+        let sessionID = UUID()
+        var emitted: [SpeechChunk] = []
+
+        vad.begin(sessionID: sessionID)
+        for index in 0..<8 {
+            emitted.append(contentsOf: vad.receive(makeCapturedAudioChunk(
+                sessionID: sessionID,
+                startedAt: Double(index) * 0.25,
+                amplitude: 0.2,
+                duration: 0.25
+            )))
+        }
+
+        require(emitted.count >= 2, "Continuous speech must emit consecutive hard-cut chunks.")
+        require(emitted[1].startedAt == 0.75, "The next continuous speech chunk must restart with overlap context before the hard-cut boundary.")
+        require(emitted[1].duration == 1, "The next continuous speech chunk must include boundary context plus new speech.")
+        let flushed = vad.end(sessionID: sessionID)
+        require(flushed.count == 1, "Continuous speech overlap must keep the next active window open for final flush.")
     }
 
     private static func checkRuntimeAudioChunksDoNotPersistIntoMarkdown() async {
@@ -2119,6 +2167,22 @@ private actor BlockingSpeechChunkConsumer: SpeechChunkConsumer {
 
     func release() {
         shouldBlock = false
+    }
+}
+
+private actor DelayedFirstSpeechChunkConsumer: SpeechChunkConsumer {
+    private var deliveredStarts: [TimeInterval] = []
+
+    func receive(_ chunk: SpeechChunk) async -> [TranscriptSegment] {
+        if deliveredStarts.isEmpty {
+            try? await Task.sleep(nanoseconds: 80_000_000)
+        }
+        deliveredStarts.append(chunk.startedAt)
+        return []
+    }
+
+    func startedAtValues() -> [TimeInterval] {
+        deliveredStarts
     }
 }
 

@@ -239,7 +239,9 @@ public actor RuntimeOnlyAudioChunkConsumer: AudioChunkConsumer {
     private let speechChunkConsumer: (any SpeechChunkConsumer)?
     private var vad: VADSpeechChunker
     private var activeSessionID: UUID?
-    private var deliveryTasks: [Task<Void, Never>] = []
+    private var pendingSpeechChunks: [SpeechChunk] = []
+    private var deliveryTask: Task<Void, Never>?
+    private var isEnding = false
     private var chunks: [CapturedAudioChunk] = []
 
     public init(
@@ -251,10 +253,10 @@ public actor RuntimeOnlyAudioChunkConsumer: AudioChunkConsumer {
     }
 
     public func begin(sessionID: UUID) {
-        for task in deliveryTasks {
-            task.cancel()
-        }
-        deliveryTasks.removeAll()
+        deliveryTask?.cancel()
+        deliveryTask = nil
+        pendingSpeechChunks.removeAll()
+        isEnding = false
         activeSessionID = sessionID
         chunks.removeAll()
         vad.begin(sessionID: sessionID)
@@ -269,11 +271,12 @@ public actor RuntimeOnlyAudioChunkConsumer: AudioChunkConsumer {
         activeSessionID = nil
         chunks.removeAll()
         enqueueDelivery(for: speechChunks)
+        isEnding = true
 
-        let pendingTasks = deliveryTasks
-        deliveryTasks.removeAll()
-        for task in pendingTasks {
-            await task.value
+        if let deliveryTask {
+            await deliveryTask.value
+        } else {
+            isEnding = false
         }
     }
 
@@ -296,10 +299,37 @@ public actor RuntimeOnlyAudioChunkConsumer: AudioChunkConsumer {
             return
         }
 
-        for speechChunk in speechChunks {
-            deliveryTasks.append(Task {
+        pendingSpeechChunks.append(contentsOf: speechChunks)
+        pendingSpeechChunks.sort {
+            if $0.startedAt == $1.startedAt {
+                return $0.lane.rawValue < $1.lane.rawValue
+            }
+            return $0.startedAt < $1.startedAt
+        }
+
+        guard deliveryTask == nil else {
+            return
+        }
+
+        deliveryTask = Task {
+            while let speechChunk = self.nextQueuedSpeechChunk() {
                 _ = await speechChunkConsumer.receive(speechChunk)
-            })
+            }
+            self.finishDeliveryIfDrained()
+        }
+    }
+
+    private func nextQueuedSpeechChunk() -> SpeechChunk? {
+        guard !pendingSpeechChunks.isEmpty else {
+            return nil
+        }
+        return pendingSpeechChunks.removeFirst()
+    }
+
+    private func finishDeliveryIfDrained() {
+        deliveryTask = nil
+        if isEnding {
+            isEnding = false
         }
     }
 }
