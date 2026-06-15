@@ -54,15 +54,15 @@ Remind the user to consider extra skills or MCP/connectors when these moments ar
 - Status: Ready for Review
 - Owner: Codex + Research/Architecture/QA agents
 - User outcome: Prove a safer local transcription architecture for fast Russian speech before changing the user-facing transcript experience again.
-- Scope: Add backend-only rolling audio buffer, rolling-window decode contract, LocalAgreement-style transcript stabilizer, and fake-decoder checks showing partial text can appear before the current VAD final-chunk path.
+- Scope: Add backend-only rolling audio buffer, rolling-window decode contract, LocalAgreement-style transcript stabilizer, fake-decoder checks showing partial text can appear before the current VAD final-chunk path, a real WhisperKit rolling-window adapter that can decode rolling windows with committed transcript prompt context, and a manual smoke command for rolling-vs-5s-batch comparison on a local Russian fixture.
 - Out of scope: Production WhisperKit streaming, UI changes, debug controls, audio files, raw audio retention after Stop, REST/MCP/SQLite exposure, cloud STT, diarization, and replacement of the current recording flow.
 - Docs touched: `docs/workstreams.md`, `docs/testing.md`.
-- Verification: `swift run Meeting007CoreChecks` passed.
+- Verification: `swift run Meeting007CoreChecks` passed; `swift run Meeting007WhisperKitChecks` passed; `swift build --product Meeting007RollingWhisperKitSmoke` passed with sandbox escalation; `swift build --product Meeting007App` passed with sandbox escalation for Swift/clang cache access.
 - Gates: Research agent identified current VAD/WhisperKit path as batch, not real-time; architecture/QA agent recommended a backend-only rolling-buffer spike with fake decoder and strict privacy boundaries; user acceptance pending.
 - Subagents: Research `019ecc5a-4906-7240-8764-bdc6b68e5402`; Architecture/QA `019ecc5e-48db-7111-be9b-bbdd11b19fb3`.
-- TDD/BDD evidence: Added checks for bounded rolling buffer retention, Stop cleanup, wrong-session rejection, earlier partial output than VAD final chunks, and LocalAgreement stable-prefix commits.
-- Open decisions: Whether to temporarily retain audio locally until finalization, whether WhisperKit exposes enough prompt/context API for rolling-window decode, target rolling window duration, model choice for live preview, and manual Russian fast-speech fixture policy.
-- Handoff notes: This spike intentionally does not wire into `Meeting007App`. It creates a testable core contract for the next workstream: real WhisperKit rolling-window experiment and side-by-side benchmark against current 5-second VAD chunks.
+- TDD/BDD evidence: Added checks for bounded rolling buffer retention, Stop cleanup, wrong-session rejection, earlier partial output than VAD final chunks, LocalAgreement stable-prefix commits, verified-model rolling adapter construction, missing-model no-engine behavior, rolling prompt/window forwarding, and rolling runtime failure reporting.
+- Open decisions: Whether to temporarily retain audio locally until finalization, target rolling window duration, model choice for live preview, and manual Russian fast-speech fixture policy.
+- Handoff notes: This spike intentionally does not wire into `Meeting007App`. WhisperKit context is supported through tokenizer-encoded `promptTokens`. Run the manual benchmark with `swift run Meeting007RollingWhisperKitSmoke /path/to/russian-audio.wav`; the command prints rolling-window output every second and 5-second batch output without saving audio or transcript files.
 
 ## Wire Real WhisperKit Into Recording Flow
 

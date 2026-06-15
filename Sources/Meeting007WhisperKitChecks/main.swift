@@ -13,6 +13,10 @@ struct Meeting007WhisperKitChecks {
         await checkProductionWhisperKitPipelineDoesNotEmitFakeTextWhenModelMissing()
         await checkWhisperKitRuntimeFailureIsReported()
         await checkWhisperKitAdapterMapsResultToTranscriptSegment()
+        await checkWhisperKitRollingAdapterBuildsEngineFromVerifiedModelDirectory()
+        await checkWhisperKitRollingAdapterDoesNotBuildEngineForMissingModelDirectory()
+        await checkWhisperKitRollingAdapterForwardsPromptAndWindow()
+        await checkWhisperKitRollingRuntimeFailureIsReported()
         await checkWhisperKitFailureDoesNotBreakFakeRussianSTT()
         checkWhisperKitAdapterDoesNotPersistSpeechChunks()
         print("Meeting007WhisperKitChecks passed")
@@ -148,6 +152,76 @@ struct Meeting007WhisperKitChecks {
         require(segments.first?.text == "Привет, это локальная проверка.", "WhisperKit transcript segment must carry engine text.")
     }
 
+    private static func checkWhisperKitRollingAdapterBuildsEngineFromVerifiedModelDirectory() async {
+        let verifiedDirectory = URL(fileURLWithPath: "/tmp/Meeting007VerifiedRollingModel", isDirectory: true)
+        let provider = FakeLocalSTTModelPathProvider(result: .ready(verifiedDirectory))
+        let factory = WhisperKitRollingEngineFactorySpy(result: "проверка rolling decode")
+        let adapter = WhisperKitRollingWindowTranscriber(
+            modelPathProvider: provider,
+            engineFactory: factory.makeEngine(modelDirectory:)
+        )
+
+        let start = await adapter.prepare()
+        let hypothesis = try? await adapter.transcribe(window: makeRollingWindow(startedAt: 4, duration: 2), prompt: "")
+        let requestedPolicies = await provider.requestedPolicies()
+
+        require(start == .ready, "Verified model directory must allow rolling WhisperKit adapter start.")
+        require(factory.modelDirectories() == [verifiedDirectory], "Rolling WhisperKit engine must be built from the verified local model directory.")
+        require(factory.prepareCount() == 1, "Rolling WhisperKit engine must be prepared once at session start.")
+        require(requestedPolicies == [.defaultRussian], "Rolling WhisperKit adapter must request the pinned Russian model policy.")
+        require(hypothesis?.text == "проверка rolling decode", "Rolling WhisperKit adapter must return engine hypothesis text.")
+    }
+
+    private static func checkWhisperKitRollingAdapterDoesNotBuildEngineForMissingModelDirectory() async {
+        let provider = FakeLocalSTTModelPathProvider(result: .unavailable(.missing))
+        let factory = WhisperKitRollingEngineFactorySpy(result: "не должен вызываться")
+        let adapter = WhisperKitRollingWindowTranscriber(
+            modelPathProvider: provider,
+            engineFactory: factory.makeEngine(modelDirectory:)
+        )
+
+        let start = await adapter.prepare()
+
+        require(start == .unavailable(TranscriptionFailure(
+            code: "local_stt_model_missing",
+            message: "The Russian transcription model is not installed on this Mac."
+        )), "Missing verified model directory must return stable unavailable state for rolling adapter.")
+        require(factory.modelDirectories().isEmpty, "Rolling WhisperKit engine must not be built when the model directory is missing.")
+    }
+
+    private static func checkWhisperKitRollingAdapterForwardsPromptAndWindow() async {
+        let engine = RecordingRollingWhisperKitEngine(result: "следующий rolling результат")
+        let adapter = WhisperKitRollingWindowTranscriber(engine: engine)
+        let window = makeRollingWindow(startedAt: 8, duration: 3)
+
+        let start = await adapter.prepare()
+        let hypothesis = try? await adapter.transcribe(window: window, prompt: "предыдущий подтвержденный текст")
+        let received = await engine.receivedRequests()
+
+        require(start == .ready, "Fake rolling engine must allow adapter start.")
+        require(received.count == 1, "Rolling adapter must send one decode request.")
+        require(received.first?.window == window, "Rolling adapter must forward the rolling audio window unchanged.")
+        require(received.first?.language == "ru", "Rolling adapter must default rolling decode to Russian.")
+        require(received.first?.prompt == "предыдущий подтвержденный текст", "Rolling adapter must forward committed transcript prompt to the engine.")
+        require(hypothesis?.windowStartedAt == 8, "Rolling adapter must keep window start timing.")
+        require(hypothesis?.windowEndedAt == 11, "Rolling adapter must keep window end timing.")
+    }
+
+    private static func checkWhisperKitRollingRuntimeFailureIsReported() async {
+        let adapter = WhisperKitRollingWindowTranscriber(engine: ThrowingRollingWhisperKitEngine())
+
+        let start = await adapter.prepare()
+        let hypothesis = try? await adapter.transcribe(window: makeRollingWindow(), prompt: "")
+        let failure = await adapter.lastFailure()
+
+        require(start == .ready, "Runtime failure check must start with a prepared rolling engine.")
+        require(hypothesis == nil, "Runtime rolling failure should not emit misleading hypothesis text.")
+        require(failure == TranscriptionFailure(
+            code: "local_stt_runtime_failed",
+            message: "Local rolling transcription stopped unexpectedly."
+        ), "Rolling runtime transcription failure must be observable by the app.")
+    }
+
     private static func checkWhisperKitFailureDoesNotBreakFakeRussianSTT() async {
         let sessionID = UUID()
         let pipeline = LocalSTTPipeline(transcriber: FakeRussianSpeechTranscriber())
@@ -196,13 +270,30 @@ struct Meeting007WhisperKitChecks {
         )
     }
 
+    private static func makeRollingWindow(
+        sessionID: UUID = UUID(),
+        startedAt: TimeInterval = 0,
+        duration: TimeInterval = 1
+    ) -> RollingAudioWindow {
+        let sampleRate: Double = 16_000
+        let sampleCount = max(1, Int(duration * sampleRate))
+        return RollingAudioWindow(
+            sessionID: sessionID,
+            lane: .mic,
+            startedAt: startedAt,
+            duration: duration,
+            sampleRate: sampleRate,
+            samples: ContiguousArray(repeating: 0.2, count: sampleCount)
+        )
+    }
+
     private static func temporaryExportFolder() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("Meeting007WhisperKitChecks", isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
     }
 
-private static func require(_ condition: @autoclosure () -> Bool, _ message: String) {
+    private static func require(_ condition: @autoclosure () -> Bool, _ message: String) {
         if !condition() {
             fputs("Check failed: \(message)\n", stderr)
             exit(1)
@@ -266,6 +357,87 @@ private struct ThrowingWhisperKitTranscriptionEngine: WhisperKitTranscriptionEng
         throw TranscriptionFailure(
             code: "test_runtime_failure",
             message: "Synthetic runtime failure."
+        )
+    }
+}
+
+private final class WhisperKitRollingEngineFactorySpy: @unchecked Sendable {
+    private let lock = NSLock()
+    private let result: String
+    private var directories: [URL] = []
+    private var prepares = 0
+
+    init(result: String) {
+        self.result = result
+    }
+
+    func makeEngine(modelDirectory: URL) -> any WhisperKitRollingWindowEngine {
+        lock.lock()
+        directories.append(modelDirectory)
+        lock.unlock()
+        return RecordingRollingWhisperKitEngine(result: result) { [weak self] in
+            self?.recordPrepare()
+        }
+    }
+
+    func modelDirectories() -> [URL] {
+        lock.lock()
+        defer { lock.unlock() }
+        return directories
+    }
+
+    func prepareCount() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return prepares
+    }
+
+    private func recordPrepare() {
+        lock.lock()
+        prepares += 1
+        lock.unlock()
+    }
+}
+
+private actor RecordingRollingWhisperKitEngine: WhisperKitRollingWindowEngine {
+    struct Request: Equatable {
+        let window: RollingAudioWindow
+        let language: String
+        let prompt: String
+    }
+
+    private let result: String
+    private let onPrepare: (@Sendable () -> Void)?
+    private var requests: [Request] = []
+
+    init(result: String, onPrepare: (@Sendable () -> Void)? = nil) {
+        self.result = result
+        self.onPrepare = onPrepare
+    }
+
+    func prepare() async throws {
+        onPrepare?()
+    }
+
+    func transcribe(window: RollingAudioWindow, language: String, prompt: String) async throws -> RollingTranscriptionHypothesis {
+        requests.append(Request(window: window, language: language, prompt: prompt))
+        return RollingTranscriptionHypothesis(
+            text: result,
+            windowStartedAt: window.startedAt,
+            windowEndedAt: window.startedAt + window.duration
+        )
+    }
+
+    func receivedRequests() -> [Request] {
+        requests
+    }
+}
+
+private struct ThrowingRollingWhisperKitEngine: WhisperKitRollingWindowEngine {
+    func transcribe(window: RollingAudioWindow, language: String, prompt: String) async throws -> RollingTranscriptionHypothesis {
+        throw TranscriptionFailure(
+            code: "test_rolling_runtime_failure",
+            message: "Synthetic rolling runtime failure."
         )
     }
 }

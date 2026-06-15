@@ -27,6 +27,7 @@ Required coverage:
 - Local STT model installer behavior: no download before explicit consent, cancel consent without side effects, confirmed install starts one controlled downloader request, progress/failure states are visible, successful install marks model readiness, existing verified installs skip download, installer failure leaves fake STT usable, and no raw audio artifacts are created.
 - HuggingFace model downloader behavior: pinned Russian source, required WhisperKit CoreML/config/tokenizer entries, staging-before-promotion, per-file SHA-256 manifest writing, checksum mismatch rejection, missing required-file rejection, and offline reuse from `install.json` without network calls.
 - WhisperKit adapter behavior: isolated SwiftPM adapter target compiles against the real `WhisperKit` product, defaults to Russian, accepts only normalized `SpeechChunk` input, builds the production engine only from a verified local model directory, returns stable missing-model state without automatic download, maps engine output to transcript segments, exposes runtime failures, and preserves fake STT checks.
+- WhisperKit rolling adapter behavior: builds a rolling-window engine only from a verified local model directory, keeps Russian defaults, forwards rolling audio windows and committed prompt context, maps fake engine output to `RollingTranscriptionHypothesis`, exposes runtime failures, and does not replace the production recording flow until manual side-by-side QA passes.
 - App transcription composition behavior: production recording uses the WhisperKit pipeline factory and must not emit deterministic fake transcript text when the model is missing or invalid.
 - Completed-session runtime history after Stop.
 - In-memory history deduplication and newest-first ordering.
@@ -45,6 +46,8 @@ Use deterministic fixtures:
 - Fake rolling-window decoder for streaming-partial spike checks before real WhisperKit rolling decode is wired.
 - Fake HuggingFace repository and file fetcher for installer checks without network or a 626 MB model download.
 - Optional local WhisperKit model path for manual spike proof; ordinary checks must not require downloading or committing model files.
+- Optional local Russian audio fixture for side-by-side rolling-vs-batch WhisperKit benchmark; fixture must be consented, uncommitted, and outside tracked repo files.
+- Manual rolling-vs-batch smoke command: `swift run Meeting007RollingWhisperKitSmoke /path/to/russian-audio.wav`; use only local consented audio, inspect terminal output, and do not commit the fixture or output.
 - Temporary SQLite database.
 - Temporary Markdown output folder.
 - Fake transcript-folder settings store.

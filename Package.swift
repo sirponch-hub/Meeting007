@@ -25,6 +25,10 @@ let package = Package(
             targets: ["Meeting007WhisperKitChecks"]
         ),
         .executable(
+            name: "Meeting007RollingWhisperKitSmoke",
+            targets: ["Meeting007RollingWhisperKitSmoke"]
+        ),
+        .executable(
             name: "Meeting007App",
             targets: ["Meeting007App"]
         )
@@ -52,6 +56,14 @@ let package = Package(
             dependencies: [
                 "Meeting007Core",
                 "Meeting007WhisperKit"
+            ]
+        ),
+        .executableTarget(
+            name: "Meeting007RollingWhisperKitSmoke",
+            dependencies: [
+                "Meeting007Core",
+                "Meeting007WhisperKit",
+                .product(name: "WhisperKit", package: "argmax-oss-swift")
             ]
         ),
         .executableTarget(

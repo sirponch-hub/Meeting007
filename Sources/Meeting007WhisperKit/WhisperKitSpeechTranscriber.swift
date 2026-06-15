@@ -80,7 +80,7 @@ public struct FakeWhisperKitTranscriptionEngine: WhisperKitTranscriptionEngine {
     }
 }
 
-private final class WhisperKitRuntimeBox: @unchecked Sendable {
+final class WhisperKitRuntimeBox: @unchecked Sendable {
     let whisperKit: WhisperKit
 
     init(whisperKit: WhisperKit) {
