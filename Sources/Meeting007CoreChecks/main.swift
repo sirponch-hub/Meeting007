@@ -55,6 +55,8 @@ struct Meeting007CoreChecks {
         await checkSuccessfulInstallReturnsReadyAvailability()
         await checkHuggingFaceDownloaderUsesPinnedRussianSource()
         await checkHuggingFaceDownloaderStagesAndPromotesVerifiedFiles()
+        await checkHuggingFaceDownloaderPublishesStreamingProgress()
+        await checkURLSessionModelFileFetcherPublishesInFileProgress()
         await checkHuggingFaceDownloaderRejectsChecksumMismatch()
         await checkHuggingFaceDownloaderRejectsMissingRequiredFiles()
         await checkFailedInstallKeepsFakeSTTAvailable()
@@ -1129,6 +1131,79 @@ struct Meeting007CoreChecks {
         require(manifest.contains("\"sha256\""), "install.json must record per-file checksums.")
     }
 
+    private static func checkHuggingFaceDownloaderPublishesStreamingProgress() async {
+        let fixture = huggingFaceFixture()
+        let downloader = HuggingFaceModelDownloader(
+            repository: FakeHuggingFaceRepository(files: fixture.remoteFiles),
+            fileFetcher: FakeModelFileFetcher(
+                dataByPath: fixture.dataByPath,
+                progressSteps: [1, 3]
+            )
+        )
+        let request = ModelDownloadRequest(
+            policy: .defaultRussian,
+            destinationDirectory: temporaryModelFolder().appendingPathComponent(WhisperModelPolicy.defaultRussian.modelID),
+            expectedBytes: WhisperModelPolicy.defaultRussian.approximateSizeInBytes
+        )
+        let progressRecorder = ModelProgressRecorder()
+
+        do {
+            _ = try await downloader.download(request) { update in
+                await progressRecorder.record(update)
+            }
+        } catch {
+            require(false, "Streaming progress fixture download should succeed: \(error)")
+        }
+
+        let downloadingUpdates = await progressRecorder.updates().filter { $0.phase == .downloading }
+        require(
+            downloadingUpdates.contains { update in
+                update.downloadedBytes > 0 && (update.fractionCompleted ?? 1) < 1
+            },
+            "Downloader must publish non-zero in-file progress before the full model is downloaded."
+        )
+    }
+
+    private static func checkURLSessionModelFileFetcherPublishesInFileProgress() async {
+        let payload = StreamingModelURLProtocol.payload
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StreamingModelURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let fetcher = URLSessionModelFileFetcher(session: session)
+        let destinationURL = temporaryModelFolder()
+            .appendingPathComponent("url-session-fetcher", isDirectory: true)
+            .appendingPathComponent("model.bin", isDirectory: false)
+        let progressRecorder = ByteProgressRecorder()
+        let file = RemoteModelFile(
+            path: "model.bin",
+            size: Int64(payload.count),
+            sha256: nil,
+            downloadURL: URL(string: "https://meeting007.local/model.bin")!
+        )
+
+        do {
+            try FileManager.default.createDirectory(
+                at: destinationURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try await fetcher.download(file, to: destinationURL) { downloadedBytes in
+                await progressRecorder.record(downloadedBytes)
+            }
+        } catch {
+            require(false, "URLSession model file fetcher streaming fixture should succeed: \(error)")
+        }
+
+        let progressUpdates = await progressRecorder.updates()
+        require(
+            progressUpdates.contains { $0 > 0 && $0 < Int64(payload.count) },
+            "Production URLSession fetcher must publish in-file progress before a large file finishes."
+        )
+        require(
+            (try? Data(contentsOf: destinationURL)) == payload,
+            "Production URLSession fetcher must write the streamed model bytes to disk."
+        )
+    }
+
     private static func checkHuggingFaceDownloaderRejectsChecksumMismatch() async {
         let modelFolder = temporaryModelFolder()
         let store = LocalSTTModelStore(rootDirectory: modelFolder)
@@ -1884,10 +1959,12 @@ private actor FakeHuggingFaceRepository: HuggingFaceModelRepository {
 
 private actor FakeModelFileFetcher: ModelFileFetching {
     private let dataByPath: [String: Data]
+    private let progressSteps: [Int64]
     private var destinations: [URL] = []
 
-    init(dataByPath: [String: Data]) {
+    init(dataByPath: [String: Data], progressSteps: [Int64] = []) {
         self.dataByPath = dataByPath
+        self.progressSteps = progressSteps
     }
 
     func download(
@@ -1905,10 +1982,75 @@ private actor FakeModelFileFetcher: ModelFileFetching {
             withIntermediateDirectories: true
         )
         try data.write(to: destinationURL)
-        await progress(Int64(data.count))
+        if progressSteps.isEmpty {
+            await progress(Int64(data.count))
+        } else {
+            for step in progressSteps {
+                await progress(min(step, Int64(data.count)))
+            }
+            await progress(Int64(data.count))
+        }
     }
 
     func downloadedDestinations() -> [URL] {
         destinations
     }
+}
+
+private actor ModelProgressRecorder {
+    private var recordedUpdates: [ModelDownloadProgress] = []
+
+    func record(_ update: ModelDownloadProgress) {
+        recordedUpdates.append(update)
+    }
+
+    func updates() -> [ModelDownloadProgress] {
+        recordedUpdates
+    }
+}
+
+private actor ByteProgressRecorder {
+    private var recordedUpdates: [Int64] = []
+
+    func record(_ update: Int64) {
+        recordedUpdates.append(update)
+    }
+
+    func updates() -> [Int64] {
+        recordedUpdates
+    }
+}
+
+private final class StreamingModelURLProtocol: URLProtocol {
+    static let payload = Data(repeating: 7, count: 2_500_000)
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        request.url?.host == "meeting007.local"
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let url = request.url,
+              let response = HTTPURLResponse(
+                url: url,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Length": "\(Self.payload.count)"]
+              ) else {
+            client?.urlProtocol(self, didFailWithError: ModelInstallFailure.networkUnavailable)
+            return
+        }
+
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        let firstChunk = Self.payload.prefix(1_250_000)
+        let secondChunk = Self.payload.dropFirst(1_250_000)
+        client?.urlProtocol(self, didLoad: Data(firstChunk))
+        client?.urlProtocol(self, didLoad: Data(secondChunk))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }

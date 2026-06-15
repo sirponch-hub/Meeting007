@@ -296,7 +296,7 @@ public struct URLSessionModelFileFetcher: ModelFileFetching {
         progress: @escaping @Sendable (Int64) async -> Void
     ) async throws {
         do {
-            let (temporaryURL, response) = try await session.download(from: file.downloadURL)
+            let (bytes, response) = try await session.bytes(from: file.downloadURL)
             guard let httpResponse = response as? HTTPURLResponse,
                   (200..<300).contains(httpResponse.statusCode) else {
                 throw ModelInstallFailure.networkUnavailable
@@ -305,10 +305,32 @@ public struct URLSessionModelFileFetcher: ModelFileFetching {
             if fileManager.fileExists(atPath: destinationURL.path) {
                 try fileManager.removeItem(at: destinationURL)
             }
-            try fileManager.moveItem(at: temporaryURL, to: destinationURL)
-            let attributes = try fileManager.attributesOfItem(atPath: destinationURL.path)
-            let size = (attributes[.size] as? NSNumber)?.int64Value ?? file.size
-            await progress(size)
+            fileManager.createFile(atPath: destinationURL.path, contents: nil)
+            let handle = try FileHandle(forWritingTo: destinationURL)
+            defer {
+                try? handle.close()
+            }
+
+            var downloadedBytes: Int64 = 0
+            var buffer = Data()
+            buffer.reserveCapacity(1_048_576)
+            for try await byte in bytes {
+                buffer.append(byte)
+                if buffer.count >= 1_048_576 {
+                    try handle.write(contentsOf: buffer)
+                    downloadedBytes += Int64(buffer.count)
+                    buffer.removeAll(keepingCapacity: true)
+                    await progress(downloadedBytes)
+                }
+            }
+            if !buffer.isEmpty {
+                try handle.write(contentsOf: buffer)
+                downloadedBytes += Int64(buffer.count)
+                await progress(downloadedBytes)
+            }
+            if downloadedBytes == 0 {
+                await progress(0)
+            }
         } catch let failure as ModelInstallFailure {
             throw failure
         } catch is CancellationError {
