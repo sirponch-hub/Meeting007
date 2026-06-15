@@ -80,15 +80,36 @@ public struct FakeWhisperKitTranscriptionEngine: WhisperKitTranscriptionEngine {
     }
 }
 
-public struct LocalWhisperKitTranscriptionEngine: WhisperKitTranscriptionEngine {
+private final class WhisperKitRuntimeBox: @unchecked Sendable {
+    let whisperKit: WhisperKit
+
+    init(whisperKit: WhisperKit) {
+        self.whisperKit = whisperKit
+    }
+}
+
+public actor LocalWhisperKitTranscriptionEngine: WhisperKitTranscriptionEngine {
     private let modelFolder: String
+    private var runtime: WhisperKitRuntimeBox?
 
     public init(modelFolder: String) {
         self.modelFolder = modelFolder
     }
 
+    public func prepare() async throws {
+        runtime = WhisperKitRuntimeBox(whisperKit: try await makeWhisperKit())
+    }
+
     public func transcribe(_ chunk: SpeechChunk, language: String) async throws -> String {
-        let whisperKit = try await makeWhisperKit()
+        let whisperKit: WhisperKit
+        if let runtime {
+            whisperKit = runtime.whisperKit
+        } else {
+            let preparedRuntime = WhisperKitRuntimeBox(whisperKit: try await makeWhisperKit())
+            runtime = preparedRuntime
+            whisperKit = preparedRuntime.whisperKit
+        }
+
         let decodeOptions = DecodingOptions(language: language)
         let results = await whisperKit.transcribeWithResults(
             audioArrays: [Array(chunk.samples)],
@@ -109,6 +130,10 @@ public struct LocalWhisperKitTranscriptionEngine: WhisperKitTranscriptionEngine 
             download: false
         )
         return try await WhisperKit(config)
+    }
+
+    public func stop() async {
+        runtime = nil
     }
 }
 
