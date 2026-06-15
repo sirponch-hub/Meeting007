@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 public struct ModelDownloadProgress: Equatable, Sendable {
@@ -33,6 +34,7 @@ public enum ModelInstallFailure: Error, Equatable, Sendable {
     case cancelled
     case insufficientDiskSpace
     case verificationFailed
+    case unsupportedRepositoryLayout
     case fileSystemPermissionDenied
     case unknown
 
@@ -48,6 +50,8 @@ public enum ModelInstallFailure: Error, Equatable, Sendable {
             return "There is not enough free disk space to install the model."
         case .verificationFailed:
             return "The downloaded model could not be verified."
+        case .unsupportedRepositoryLayout:
+            return "The model source is not in a supported format."
         case .fileSystemPermissionDenied:
             return "Meeting007 could not write to local model storage."
         case .unknown:
@@ -87,10 +91,40 @@ public struct ModelDownloadRequest: Equatable, Sendable {
 public struct DownloadedModelArtifact: Equatable, Sendable {
     public let policy: WhisperModelPolicy
     public let localURL: URL
+    public let repositoryID: String?
+    public let revision: String?
+    public let folderName: String?
+    public let actualBytes: Int64
+    public let files: [DownloadedModelFileManifest]
 
-    public init(policy: WhisperModelPolicy, localURL: URL) {
+    public init(
+        policy: WhisperModelPolicy,
+        localURL: URL,
+        repositoryID: String? = nil,
+        revision: String? = nil,
+        folderName: String? = nil,
+        actualBytes: Int64 = 0,
+        files: [DownloadedModelFileManifest] = []
+    ) {
         self.policy = policy
         self.localURL = localURL
+        self.repositoryID = repositoryID
+        self.revision = revision
+        self.folderName = folderName
+        self.actualBytes = actualBytes
+        self.files = files
+    }
+}
+
+public struct DownloadedModelFileManifest: Codable, Equatable, Sendable {
+    public let path: String
+    public let size: Int64
+    public let sha256: String
+
+    public init(path: String, size: Int64, sha256: String) {
+        self.path = path
+        self.size = size
+        self.sha256 = sha256
     }
 }
 
@@ -190,6 +224,12 @@ public actor LocalSTTModelStore: LocalSTTModelManaging {
             guard marker.matches(policy) else {
                 return .invalid("Installed model marker does not match the requested Russian model policy.")
             }
+            guard marker.hasVerifiedManifest else {
+                return .invalid("Installed model marker does not include a verified local manifest.")
+            }
+            guard verifyInstalledFiles(marker.files, for: policy) else {
+                return .invalid("Installed model files could not be verified.")
+            }
             return .ready
         } catch {
             return .invalid("Installed model marker could not be verified.")
@@ -203,12 +243,34 @@ public actor LocalSTTModelStore: LocalSTTModelManaging {
     public func markInstalled(_ artifact: DownloadedModelArtifact) throws -> URL {
         let modelDirectory = modelDirectory(for: artifact.policy)
         do {
-            try fileManager.createDirectory(at: modelDirectory, withIntermediateDirectories: true)
+            try fileManager.createDirectory(
+                at: modelDirectory.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            if artifact.localURL.standardizedFileURL != modelDirectory.standardizedFileURL {
+                if fileManager.fileExists(atPath: modelDirectory.path) {
+                    try fileManager.removeItem(at: modelDirectory)
+                }
+                if fileManager.fileExists(atPath: artifact.localURL.path) {
+                    try fileManager.moveItem(at: artifact.localURL, to: modelDirectory)
+                } else {
+                    try fileManager.createDirectory(at: modelDirectory, withIntermediateDirectories: true)
+                }
+            } else {
+                try fileManager.createDirectory(at: modelDirectory, withIntermediateDirectories: true)
+            }
             let marker = LocalSTTModelInstallMarker(
                 policyID: artifact.policy.modelID,
                 language: artifact.policy.language,
                 expectedBytes: artifact.policy.approximateSizeInBytes,
+                actualBytes: artifact.actualBytes,
+                repositoryID: artifact.repositoryID,
+                revision: artifact.revision,
+                folderName: artifact.folderName,
+                fileCount: artifact.files.count,
+                files: artifact.files,
                 source: "explicit-user-consent",
+                status: "installed",
                 installedAt: Date()
             )
             let data = try JSONEncoder.meeting007Encoder.encode(marker)
@@ -221,6 +283,25 @@ public actor LocalSTTModelStore: LocalSTTModelManaging {
 
     private func installMarkerURL(for policy: WhisperModelPolicy) -> URL {
         modelDirectory(for: policy).appendingPathComponent("install.json", isDirectory: false)
+    }
+
+    private func verifyInstalledFiles(_ files: [DownloadedModelFileManifest], for policy: WhisperModelPolicy) -> Bool {
+        let modelDirectory = modelDirectory(for: policy)
+        for file in files {
+            guard LocalModelPathValidator.isSafeRelativePath(file.path) else {
+                return false
+            }
+            let fileURL = modelDirectory.appendingPathComponent(file.path, isDirectory: false)
+            guard let attributes = try? fileManager.attributesOfItem(atPath: fileURL.path),
+                  let size = attributes[.size] as? NSNumber,
+                  size.int64Value == file.size else {
+                return false
+            }
+            guard (try? LocalModelChecksum.sha256Hex(for: fileURL)) == file.sha256 else {
+                return false
+            }
+        }
+        return true
     }
 }
 
@@ -311,14 +392,60 @@ private struct LocalSTTModelInstallMarker: Codable {
     let policyID: String
     let language: String
     let expectedBytes: Int
+    let actualBytes: Int64
+    let repositoryID: String?
+    let revision: String?
+    let folderName: String?
+    let fileCount: Int
+    let files: [DownloadedModelFileManifest]
     let source: String
+    let status: String
     let installedAt: Date
+
+    var hasVerifiedManifest: Bool {
+        fileCount == files.count && !files.isEmpty
+    }
 
     func matches(_ policy: WhisperModelPolicy) -> Bool {
         policyID == policy.modelID
             && language == policy.language
             && expectedBytes == policy.approximateSizeInBytes
             && source == "explicit-user-consent"
+            && status == "installed"
+    }
+}
+
+enum LocalModelPathValidator {
+    static func isSafeRelativePath(_ path: String) -> Bool {
+        guard !path.isEmpty, !path.hasPrefix("/") else {
+            return false
+        }
+
+        let components = path.split(separator: "/", omittingEmptySubsequences: false)
+        return components.allSatisfy { component in
+            !component.isEmpty && component != "." && component != ".."
+        }
+    }
+}
+
+enum LocalModelChecksum {
+    static func sha256Hex(for fileURL: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer {
+            try? handle.close()
+        }
+
+        var hasher = SHA256()
+        while autoreleasepool(invoking: {
+            let data = handle.readData(ofLength: 1_048_576)
+            guard !data.isEmpty else {
+                return false
+            }
+            hasher.update(data: data)
+            return true
+        }) {}
+
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }
 

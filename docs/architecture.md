@@ -75,7 +75,10 @@ Current implemented STT boundary:
 - The WhisperKit adapter defaults to Russian, requires model readiness before transcribing, and deliberately does not initiate automatic model download.
 - `LocalSTTModelInstaller` owns explicit-consent install lifecycle separately from transcription: pending consent, progress, verification, ready, cancellation, and failure.
 - `LocalSTTModelStore` checks the app-owned model folder under Application Support and exposes readiness through `LocalSTTModelManaging`; model files are never stored in the Markdown transcript folder.
-- The app Settings surface shows Russian model status and starts install only after a confirmation sheet. Real recursive HuggingFace artifact download/checksum hardening and real WhisperKit runtime enablement in the app flow are still separate future slices.
+- `HuggingFaceModelDownloader` is the production installer boundary for the current Russian model. It lists files from `argmaxinc/whisperkit-coreml`, pins the `openai_whisper-large-v3-v20240930_626MB` folder at revision `7235bbd`, downloads files into an app-owned `.staging/<requestID>/` folder, verifies required CoreML/config entries, computes local SHA-256 for every file, compares HuggingFace LFS SHA-256 when available, then promotes the verified folder into the final model path.
+- `install.json` is written only after successful verification and records policy ID, language, repository, revision, folder, actual bytes, file count, per-file sizes, per-file SHA-256, `source: explicit-user-consent`, and `status: installed`.
+- Existing installs are considered ready only when `install.json` matches the current Russian policy and all recorded files still exist with matching sizes and SHA-256 values. A folder without a valid marker or with corrupted files is not ready and does not trigger automatic repair.
+- The app Settings surface shows Russian model status and starts install only after a confirmation sheet. Real WhisperKit runtime enablement in the app recording flow remains a separate future slice.
 
 ## Storage
 

@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import Meeting007Core
 
 @main
@@ -52,6 +53,10 @@ struct Meeting007CoreChecks {
         await checkExistingModelWithoutInstallManifestRequiresInstall()
         await checkInstallerPublishesProgress()
         await checkSuccessfulInstallReturnsReadyAvailability()
+        await checkHuggingFaceDownloaderUsesPinnedRussianSource()
+        await checkHuggingFaceDownloaderStagesAndPromotesVerifiedFiles()
+        await checkHuggingFaceDownloaderRejectsChecksumMismatch()
+        await checkHuggingFaceDownloaderRejectsMissingRequiredFiles()
         await checkFailedInstallKeepsFakeSTTAvailable()
         await checkCancelStopsDownloadAndClearsPartialState()
         await checkInstallerDoesNotPersistAudioArtifacts()
@@ -919,10 +924,7 @@ struct Meeting007CoreChecks {
 
     private static func checkConfirmedInstallStartsDownload() async {
         let modelFolder = temporaryModelFolder()
-        let artifact = DownloadedModelArtifact(
-            policy: .defaultRussian,
-            localURL: modelFolder.appendingPathComponent("prepared-model", isDirectory: true)
-        )
+        let artifact = preparedModelArtifact(rootDirectory: modelFolder)
         let downloader = FakeModelDownloader(result: .success(artifact))
         let installer = LocalSTTModelInstaller(
             downloader: downloader,
@@ -940,10 +942,7 @@ struct Meeting007CoreChecks {
     private static func checkExistingInstalledModelReturnsReadyWithoutDownload() async {
         let modelFolder = temporaryModelFolder()
         let store = LocalSTTModelStore(rootDirectory: modelFolder)
-        let artifact = DownloadedModelArtifact(
-            policy: .defaultRussian,
-            localURL: modelFolder.appendingPathComponent("prepared-model", isDirectory: true)
-        )
+        let artifact = preparedModelArtifact(rootDirectory: modelFolder)
         do {
             _ = try await store.markInstalled(artifact)
         } catch {
@@ -972,9 +971,9 @@ struct Meeting007CoreChecks {
         let store = LocalSTTModelStore(rootDirectory: modelFolder)
         let wrongPolicy = WhisperModelPolicy.debugTiny
         do {
-            _ = try await store.markInstalled(DownloadedModelArtifact(
+            _ = try await store.markInstalled(preparedModelArtifact(
                 policy: wrongPolicy,
-                localURL: modelFolder.appendingPathComponent("prepared-debug-model", isDirectory: true)
+                rootDirectory: modelFolder
             ))
         } catch {
             require(false, "Wrong model fixture must be markable as installed: \(error)")
@@ -995,9 +994,9 @@ struct Meeting007CoreChecks {
             isDebugOnly: false
         )
         do {
-            _ = try await store.markInstalled(DownloadedModelArtifact(
+            _ = try await store.markInstalled(preparedModelArtifact(
                 policy: wrongLanguagePolicy,
-                localURL: modelFolder.appendingPathComponent("prepared-model", isDirectory: true)
+                rootDirectory: modelFolder
             ))
         } catch {
             require(false, "Wrong language model fixture must be markable as installed: \(error)")
@@ -1048,10 +1047,7 @@ struct Meeting007CoreChecks {
     private static func checkSuccessfulInstallReturnsReadyAvailability() async {
         let modelFolder = temporaryModelFolder()
         let store = LocalSTTModelStore(rootDirectory: modelFolder)
-        let artifact = DownloadedModelArtifact(
-            policy: .defaultRussian,
-            localURL: modelFolder.appendingPathComponent("prepared-model", isDirectory: true)
-        )
+        let artifact = preparedModelArtifact(rootDirectory: modelFolder)
         let installer = LocalSTTModelInstaller(
             downloader: FakeModelDownloader(result: .success(artifact)),
             store: store
@@ -1066,6 +1062,113 @@ struct Meeting007CoreChecks {
             require(modelURL.lastPathComponent == WhisperModelPolicy.defaultRussian.modelID, "Ready state must point at the local model folder.")
         } else {
             require(false, "Successful install must enter ready state.")
+        }
+    }
+
+    private static func checkHuggingFaceDownloaderUsesPinnedRussianSource() async {
+        let fixture = huggingFaceFixture()
+        let repository = FakeHuggingFaceRepository(files: fixture.remoteFiles)
+        let downloader = HuggingFaceModelDownloader(
+            repository: repository,
+            fileFetcher: FakeModelFileFetcher(dataByPath: fixture.dataByPath)
+        )
+        let request = ModelDownloadRequest(
+            policy: .defaultRussian,
+            destinationDirectory: temporaryModelFolder().appendingPathComponent(WhisperModelPolicy.defaultRussian.modelID),
+            expectedBytes: WhisperModelPolicy.defaultRussian.approximateSizeInBytes
+        )
+
+        do {
+            _ = try await downloader.download(request) { _ in }
+        } catch {
+            require(false, "Pinned HuggingFace fixture download should succeed: \(error)")
+        }
+
+        let requestedPolicies = await repository.requestedPolicies()
+        require(requestedPolicies == [.defaultRussian], "Downloader must request the pinned HuggingFace Russian model source.")
+        require(HuggingFaceWhisperModelPolicy.defaultRussian.repositoryID == "argmaxinc/whisperkit-coreml", "Downloader must use the expected HuggingFace repository.")
+        require(HuggingFaceWhisperModelPolicy.defaultRussian.folderName == "openai_whisper-large-v3-v20240930_626MB", "Downloader must use the expected WhisperKit CoreML folder.")
+        require(!HuggingFaceWhisperModelPolicy.defaultRussian.revision.isEmpty, "Downloader must pin a HuggingFace revision.")
+    }
+
+    private static func checkHuggingFaceDownloaderStagesAndPromotesVerifiedFiles() async {
+        let modelFolder = temporaryModelFolder()
+        let store = LocalSTTModelStore(rootDirectory: modelFolder)
+        let fixture = huggingFaceFixture()
+        let fileFetcher = FakeModelFileFetcher(dataByPath: fixture.dataByPath)
+        let downloader = HuggingFaceModelDownloader(
+            repository: FakeHuggingFaceRepository(files: fixture.remoteFiles),
+            fileFetcher: fileFetcher
+        )
+        let installer = LocalSTTModelInstaller(downloader: downloader, store: store)
+
+        await installer.confirmInstall(policy: .defaultRussian)
+        let state = await installer.state()
+        let availability = await store.availability(for: .defaultRussian)
+        let downloadedDestinations = await fileFetcher.downloadedDestinations()
+        let finalDirectory = await store.modelDirectory(for: .defaultRussian)
+        let installManifestURL = finalDirectory.appendingPathComponent("install.json")
+
+        require(availability == .ready, "Verified HuggingFace files must make the local model ready.")
+        if case .ready(let modelURL) = state {
+            require(modelURL == finalDirectory, "Ready state must point to the promoted final model directory.")
+        } else {
+            require(false, "Successful verified HuggingFace install must enter ready state.")
+        }
+        require(downloadedDestinations.allSatisfy { $0.path.contains("/.staging/") }, "HuggingFace files must download into staging first.")
+        require(FileManager.default.fileExists(atPath: installManifestURL.path), "install.json must be written after verification.")
+        let manifest = (try? String(contentsOf: installManifestURL)) ?? ""
+        require(
+            manifest.contains("\"repositoryID\"")
+                && manifest.contains("argmaxinc")
+                && manifest.contains("whisperkit-coreml"),
+            "install.json must record the HuggingFace repository."
+        )
+        require(manifest.contains("\"revision\"") && manifest.contains("7235bbd"), "install.json must record the pinned HuggingFace revision.")
+        require(manifest.contains("\"source\"") && manifest.contains("explicit-user-consent"), "install.json must record explicit user consent as the source.")
+        require(manifest.contains("\"sha256\""), "install.json must record per-file checksums.")
+    }
+
+    private static func checkHuggingFaceDownloaderRejectsChecksumMismatch() async {
+        let modelFolder = temporaryModelFolder()
+        let store = LocalSTTModelStore(rootDirectory: modelFolder)
+        let fixture = huggingFaceFixture(checksumOverride: "deadbeef")
+        let downloader = HuggingFaceModelDownloader(
+            repository: FakeHuggingFaceRepository(files: fixture.remoteFiles),
+            fileFetcher: FakeModelFileFetcher(dataByPath: fixture.dataByPath)
+        )
+        let installer = LocalSTTModelInstaller(downloader: downloader, store: store)
+
+        await installer.confirmInstall(policy: .defaultRussian)
+        let state = await installer.state()
+        let availability = await store.availability(for: .defaultRussian)
+        let finalDirectory = await store.modelDirectory(for: .defaultRussian)
+        let markerURL = finalDirectory.appendingPathComponent("install.json")
+
+        require(state == .failed(.verificationFailed), "Checksum mismatch must fail installation.")
+        require(availability != .ready, "Checksum mismatch must not make the model ready.")
+        require(!FileManager.default.fileExists(atPath: markerURL.path), "Checksum mismatch must not write a ready marker.")
+    }
+
+    private static func checkHuggingFaceDownloaderRejectsMissingRequiredFiles() async {
+        let fixture = huggingFaceFixture(omittingRequiredEntry: "TextDecoder.mlmodelc")
+        let downloader = HuggingFaceModelDownloader(
+            repository: FakeHuggingFaceRepository(files: fixture.remoteFiles),
+            fileFetcher: FakeModelFileFetcher(dataByPath: fixture.dataByPath)
+        )
+        let request = ModelDownloadRequest(
+            policy: .defaultRussian,
+            destinationDirectory: temporaryModelFolder().appendingPathComponent(WhisperModelPolicy.defaultRussian.modelID),
+            expectedBytes: WhisperModelPolicy.defaultRussian.approximateSizeInBytes
+        )
+
+        do {
+            _ = try await downloader.download(request) { _ in }
+            require(false, "Missing required CoreML bundle must fail verification before ready.")
+        } catch let failure as ModelInstallFailure {
+            require(failure == .unsupportedRepositoryLayout, "Missing required model files must be reported as unsupported layout.")
+        } catch {
+            require(false, "Missing required files must fail with a model install failure.")
         }
     }
 
@@ -1107,10 +1210,7 @@ struct Meeting007CoreChecks {
 
     private static func checkInstallerDoesNotPersistAudioArtifacts() async {
         let modelFolder = temporaryModelFolder()
-        let artifact = DownloadedModelArtifact(
-            policy: .defaultRussian,
-            localURL: modelFolder.appendingPathComponent("prepared-model", isDirectory: true)
-        )
+        let artifact = preparedModelArtifact(rootDirectory: modelFolder)
         let installer = LocalSTTModelInstaller(
             downloader: FakeModelDownloader(result: .success(artifact)),
             store: LocalSTTModelStore(rootDirectory: modelFolder)
@@ -1553,6 +1653,95 @@ struct Meeting007CoreChecks {
             .appendingPathComponent("whisper", isDirectory: true)
     }
 
+    private static func preparedModelArtifact(
+        policy: WhisperModelPolicy = .defaultRussian,
+        rootDirectory: URL
+    ) -> DownloadedModelArtifact {
+        let preparedDirectory = rootDirectory
+            .appendingPathComponent("prepared-\(UUID().uuidString)", isDirectory: true)
+        let files = [
+            ("AudioEncoder.mlmodelc/weights.bin", Data("audio".utf8)),
+            ("MelSpectrogram.mlmodelc/weights.bin", Data("mel".utf8)),
+            ("TextDecoder.mlmodelc/weights.bin", Data("decoder".utf8)),
+            ("config.json", Data("{\"language\":\"ru\"}".utf8)),
+            ("generation_config.json", Data("{\"task\":\"transcribe\"}".utf8))
+        ]
+        let manifests = writeModelFiles(files, into: preparedDirectory)
+        return DownloadedModelArtifact(
+            policy: policy,
+            localURL: preparedDirectory,
+            repositoryID: HuggingFaceWhisperModelPolicy.defaultRussian.repositoryID,
+            revision: HuggingFaceWhisperModelPolicy.defaultRussian.revision,
+            folderName: HuggingFaceWhisperModelPolicy.defaultRussian.folderName,
+            actualBytes: manifests.reduce(Int64(0)) { $0 + $1.size },
+            files: manifests
+        )
+    }
+
+    private struct HuggingFaceFixture {
+        let remoteFiles: [RemoteModelFile]
+        let dataByPath: [String: Data]
+    }
+
+    private static func huggingFaceFixture(
+        checksumOverride: String? = nil,
+        omittingRequiredEntry: String? = nil
+    ) -> HuggingFaceFixture {
+        let folder = HuggingFaceWhisperModelPolicy.defaultRussian.folderName
+        let files = [
+            ("\(folder)/AudioEncoder.mlmodelc/weights.bin", Data("audio".utf8)),
+            ("\(folder)/MelSpectrogram.mlmodelc/weights.bin", Data("mel".utf8)),
+            ("\(folder)/TextDecoder.mlmodelc/weights.bin", Data("decoder".utf8)),
+            ("\(folder)/config.json", Data("{\"language\":\"ru\"}".utf8)),
+            ("\(folder)/generation_config.json", Data("{\"task\":\"transcribe\"}".utf8)),
+            ("unrelated-folder/config.json", Data("ignore".utf8))
+        ].filter { path, _ in
+            guard let omittingRequiredEntry else {
+                return true
+            }
+            return !path.contains("/\(omittingRequiredEntry)/") && !path.hasSuffix("/\(omittingRequiredEntry)")
+        }
+        let dataByPath = Dictionary(uniqueKeysWithValues: files)
+        let remoteFiles = files.map { path, data in
+            RemoteModelFile(
+                path: path,
+                size: Int64(data.count),
+                sha256: checksumOverride ?? sha256Hex(data),
+                downloadURL: URL(string: "https://huggingface.co/\(path)")!
+            )
+        }
+        return HuggingFaceFixture(remoteFiles: remoteFiles, dataByPath: dataByPath)
+    }
+
+    private static func writeModelFiles(
+        _ files: [(String, Data)],
+        into directory: URL
+    ) -> [DownloadedModelFileManifest] {
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            return try files.map { path, data in
+                let fileURL = directory.appendingPathComponent(path, isDirectory: false)
+                try FileManager.default.createDirectory(
+                    at: fileURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try data.write(to: fileURL)
+                return DownloadedModelFileManifest(
+                    path: path,
+                    size: Int64(data.count),
+                    sha256: sha256Hex(data)
+                )
+            }
+        } catch {
+            require(false, "Prepared model fixture must be writable: \(error)")
+            return []
+        }
+    }
+
+    private static func sha256Hex(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
     private static func makeCapturedAudioChunk(
         sessionID: UUID,
         lane: CaptureLane = .mic,
@@ -1672,5 +1861,54 @@ private actor FakeMicrophoneCaptureDriver: MicrophoneCaptureDriver {
 
     func stoppedSessionIDs() -> [UUID] {
         stops
+    }
+}
+
+private actor FakeHuggingFaceRepository: HuggingFaceModelRepository {
+    private let files: [RemoteModelFile]
+    private var policies: [HuggingFaceWhisperModelPolicy] = []
+
+    init(files: [RemoteModelFile]) {
+        self.files = files
+    }
+
+    func listFiles(for policy: HuggingFaceWhisperModelPolicy) async throws -> [RemoteModelFile] {
+        policies.append(policy)
+        return files
+    }
+
+    func requestedPolicies() -> [HuggingFaceWhisperModelPolicy] {
+        policies
+    }
+}
+
+private actor FakeModelFileFetcher: ModelFileFetching {
+    private let dataByPath: [String: Data]
+    private var destinations: [URL] = []
+
+    init(dataByPath: [String: Data]) {
+        self.dataByPath = dataByPath
+    }
+
+    func download(
+        _ file: RemoteModelFile,
+        to destinationURL: URL,
+        progress: @escaping @Sendable (Int64) async -> Void
+    ) async throws {
+        guard let data = dataByPath[file.path] else {
+            throw ModelInstallFailure.networkUnavailable
+        }
+
+        destinations.append(destinationURL)
+        try FileManager.default.createDirectory(
+            at: destinationURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try data.write(to: destinationURL)
+        await progress(Int64(data.count))
+    }
+
+    func downloadedDestinations() -> [URL] {
+        destinations
     }
 }
