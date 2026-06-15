@@ -32,6 +32,8 @@ struct Meeting007CoreChecks {
         await checkMicrophoneStartFailureReturnsStableError()
         checkRuntimeAudioNormalizerDownmixesAndResamplesToMono16k()
         await checkRuntimeAudioConsumerAcceptsOnlyActiveSampleBearingChunks()
+        await checkRuntimeAudioConsumerDoesNotBlockCaptureOnSlowTranscription()
+        await checkRuntimeAudioConsumerFlushesSpeechBeforeEndReturns()
         checkVADSuppressesQuietFrames()
         checkVADEmitsSpeechChunkForSpeechFrames()
         checkVADKeepsShortPauseInsideOneUtterance()
@@ -688,6 +690,48 @@ struct Meeting007CoreChecks {
 
         let stoppedChunks = await consumer.capturedChunks()
         require(stoppedChunks.isEmpty, "Runtime consumer must clear PCM samples on Stop and reject late chunks.")
+    }
+
+    private static func checkRuntimeAudioConsumerDoesNotBlockCaptureOnSlowTranscription() async {
+        let sessionID = UUID()
+        let slowSTT = BlockingSpeechChunkConsumer()
+        let consumer = RuntimeOnlyAudioChunkConsumer(
+            speechChunkConsumer: slowSTT,
+            vadConfiguration: testVADConfiguration()
+        )
+        let returned = AsyncFlag()
+
+        await consumer.begin(sessionID: sessionID)
+        await consumer.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0, amplitude: 0.2))
+        let receiveTask = Task {
+            await consumer.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0.2, amplitude: 0.001))
+            await returned.set()
+        }
+
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        let didReturnBeforeSTTFinished = await returned.value()
+        require(didReturnBeforeSTTFinished, "Runtime consumer must not block microphone capture while STT processes a prior speech chunk.")
+
+        await slowSTT.release()
+        await receiveTask.value
+        await consumer.end(sessionID: sessionID)
+    }
+
+    private static func checkRuntimeAudioConsumerFlushesSpeechBeforeEndReturns() async {
+        let sessionID = UUID()
+        let recorder = RecordingSpeechChunkConsumer()
+        let consumer = RuntimeOnlyAudioChunkConsumer(
+            speechChunkConsumer: recorder,
+            vadConfiguration: testVADConfiguration()
+        )
+
+        await consumer.begin(sessionID: sessionID)
+        await consumer.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0, amplitude: 0.2))
+        await consumer.end(sessionID: sessionID)
+
+        let delivered = await recorder.chunks()
+        require(delivered.count == 1, "Runtime consumer end must flush open speech before Stop finalizes STT.")
+        require(delivered.first?.sessionID == sessionID, "Flushed speech must keep the active meeting ID.")
     }
 
     private static func checkVADSuppressesQuietFrames() {
@@ -1990,6 +2034,46 @@ private struct FailingRecordingCaptureDriver: RecordingCaptureDriver {
     }
 
     func stop(sessionID: UUID) async throws {}
+}
+
+private actor AsyncFlag {
+    private var isSet = false
+
+    func set() {
+        isSet = true
+    }
+
+    func value() -> Bool {
+        isSet
+    }
+}
+
+private actor BlockingSpeechChunkConsumer: SpeechChunkConsumer {
+    private var shouldBlock = true
+
+    func receive(_ chunk: SpeechChunk) async -> [TranscriptSegment] {
+        while shouldBlock {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return []
+    }
+
+    func release() {
+        shouldBlock = false
+    }
+}
+
+private actor RecordingSpeechChunkConsumer: SpeechChunkConsumer {
+    private var deliveredChunks: [SpeechChunk] = []
+
+    func receive(_ chunk: SpeechChunk) async -> [TranscriptSegment] {
+        deliveredChunks.append(chunk)
+        return []
+    }
+
+    func chunks() -> [SpeechChunk] {
+        deliveredChunks
+    }
 }
 
 private actor FakeMicrophoneCaptureDriver: MicrophoneCaptureDriver {

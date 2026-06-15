@@ -191,6 +191,7 @@ final class RecordingShellViewModel: ObservableObject {
 
         Task {
             let currentSessionID = await controller.currentSession()?.id
+            let nextState = await controller.stopManualRecording()
             let frozenSegments: [TranscriptSegment]
             if let currentSessionID {
                 frozenSegments = await sttPipeline.stop(sessionID: currentSessionID)
@@ -199,7 +200,6 @@ final class RecordingShellViewModel: ObservableObject {
             }
             await transcriptPreviewController.stop()
             previewSegments = frozenSegments
-            let nextState = await controller.stopManualRecording()
             apply(nextState)
             if nextState == .stopped {
                 microphoneStatusModel.update(.idle)

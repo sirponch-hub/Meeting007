@@ -196,6 +196,7 @@ public actor RuntimeOnlyAudioChunkConsumer: AudioChunkConsumer {
     private let speechChunkConsumer: (any SpeechChunkConsumer)?
     private var vad: VADSpeechChunker
     private var activeSessionID: UUID?
+    private var deliveryTasks: [Task<Void, Never>] = []
     private var chunks: [CapturedAudioChunk] = []
 
     public init(
@@ -207,6 +208,10 @@ public actor RuntimeOnlyAudioChunkConsumer: AudioChunkConsumer {
     }
 
     public func begin(sessionID: UUID) {
+        for task in deliveryTasks {
+            task.cancel()
+        }
+        deliveryTasks.removeAll()
         activeSessionID = sessionID
         chunks.removeAll()
         vad.begin(sessionID: sessionID)
@@ -220,8 +225,12 @@ public actor RuntimeOnlyAudioChunkConsumer: AudioChunkConsumer {
         let speechChunks = vad.end(sessionID: sessionID)
         activeSessionID = nil
         chunks.removeAll()
-        for speechChunk in speechChunks {
-            await speechChunkConsumer?.receive(speechChunk)
+        enqueueDelivery(for: speechChunks)
+
+        let pendingTasks = deliveryTasks
+        deliveryTasks.removeAll()
+        for task in pendingTasks {
+            await task.value
         }
     }
 
@@ -232,12 +241,22 @@ public actor RuntimeOnlyAudioChunkConsumer: AudioChunkConsumer {
 
         chunks.append(chunk)
         let speechChunks = vad.receive(chunk)
-        for speechChunk in speechChunks {
-            await speechChunkConsumer?.receive(speechChunk)
-        }
+        enqueueDelivery(for: speechChunks)
     }
 
     public func capturedChunks() -> [CapturedAudioChunk] {
         chunks
+    }
+
+    private func enqueueDelivery(for speechChunks: [SpeechChunk]) {
+        guard let speechChunkConsumer else {
+            return
+        }
+
+        for speechChunk in speechChunks {
+            deliveryTasks.append(Task {
+                _ = await speechChunkConsumer.receive(speechChunk)
+            })
+        }
     }
 }
