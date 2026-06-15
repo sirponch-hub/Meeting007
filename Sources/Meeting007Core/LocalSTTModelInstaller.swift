@@ -184,7 +184,16 @@ public actor LocalSTTModelStore: LocalSTTModelManaging {
             return .missing
         }
 
-        return .ready
+        do {
+            let data = try Data(contentsOf: markerURL)
+            let marker = try JSONDecoder.meeting007Decoder.decode(LocalSTTModelInstallMarker.self, from: data)
+            guard marker.matches(policy) else {
+                return .invalid("Installed model marker does not match the requested Russian model policy.")
+            }
+            return .ready
+        } catch {
+            return .invalid("Installed model marker could not be verified.")
+        }
     }
 
     public func modelDirectory(for policy: WhisperModelPolicy) -> URL {
@@ -241,6 +250,14 @@ public actor LocalSTTModelInstaller {
     }
 
     public func confirmInstall(policy: WhisperModelPolicy) async {
+        let currentAvailability = await store.availability(for: policy)
+        if currentAvailability == .ready {
+            let modelDirectory = await store.modelDirectory(for: policy)
+            activeRequestID = nil
+            installState = .ready(modelDirectory)
+            return
+        }
+
         let destination = await store.modelDirectory(for: policy)
         let request = ModelDownloadRequest(
             policy: policy,
@@ -296,6 +313,13 @@ private struct LocalSTTModelInstallMarker: Codable {
     let expectedBytes: Int
     let source: String
     let installedAt: Date
+
+    func matches(_ policy: WhisperModelPolicy) -> Bool {
+        policyID == policy.modelID
+            && language == policy.language
+            && expectedBytes == policy.approximateSizeInBytes
+            && source == "explicit-user-consent"
+    }
 }
 
 private extension JSONEncoder {
@@ -304,5 +328,13 @@ private extension JSONEncoder {
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         return encoder
+    }
+}
+
+private extension JSONDecoder {
+    static var meeting007Decoder: JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
     }
 }

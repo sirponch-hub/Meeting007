@@ -46,6 +46,10 @@ struct Meeting007CoreChecks {
         await checkModelInstallerDoesNotStartWithoutConsent()
         await checkInstallRequiresExplicitConsent()
         await checkConfirmedInstallStartsDownload()
+        await checkExistingInstalledModelReturnsReadyWithoutDownload()
+        await checkExistingModelWithWrongPolicyDoesNotReturnReady()
+        await checkExistingModelWithWrongLanguageDoesNotReturnReady()
+        await checkExistingModelWithoutInstallManifestRequiresInstall()
         await checkInstallerPublishesProgress()
         await checkSuccessfulInstallReturnsReadyAvailability()
         await checkFailedInstallKeepsFakeSTTAvailable()
@@ -931,6 +935,92 @@ struct Meeting007CoreChecks {
         require(requests.count == 1, "Confirmed install must start exactly one controlled download.")
         require(requests.first?.policy == .defaultRussian, "Installer must download the pinned Russian model policy.")
         require(requests.first?.expectedBytes == WhisperModelPolicy.defaultRussian.approximateSizeInBytes, "Installer must disclose the expected model size.")
+    }
+
+    private static func checkExistingInstalledModelReturnsReadyWithoutDownload() async {
+        let modelFolder = temporaryModelFolder()
+        let store = LocalSTTModelStore(rootDirectory: modelFolder)
+        let artifact = DownloadedModelArtifact(
+            policy: .defaultRussian,
+            localURL: modelFolder.appendingPathComponent("prepared-model", isDirectory: true)
+        )
+        do {
+            _ = try await store.markInstalled(artifact)
+        } catch {
+            require(false, "Existing model fixture must be markable as installed: \(error)")
+        }
+
+        let downloader = FakeModelDownloader(result: .failure(.downloadSourceUnavailable))
+        let installer = LocalSTTModelInstaller(downloader: downloader, store: store)
+
+        await installer.confirmInstall(policy: .defaultRussian)
+        let state = await installer.state()
+        let availability = await store.availability(for: .defaultRussian)
+        let requests = await downloader.downloadRequests()
+
+        require(availability == .ready, "Existing matching model marker must return ready availability.")
+        if case .ready(let modelURL) = state {
+            require(modelURL.lastPathComponent == WhisperModelPolicy.defaultRussian.modelID, "Existing matching model must set installer state to ready.")
+        } else {
+            require(false, "Existing matching model must skip download and enter ready state.")
+        }
+        require(requests.isEmpty, "Existing matching model must not be downloaded again.")
+    }
+
+    private static func checkExistingModelWithWrongPolicyDoesNotReturnReady() async {
+        let modelFolder = temporaryModelFolder()
+        let store = LocalSTTModelStore(rootDirectory: modelFolder)
+        let wrongPolicy = WhisperModelPolicy.debugTiny
+        do {
+            _ = try await store.markInstalled(DownloadedModelArtifact(
+                policy: wrongPolicy,
+                localURL: modelFolder.appendingPathComponent("prepared-debug-model", isDirectory: true)
+            ))
+        } catch {
+            require(false, "Wrong model fixture must be markable as installed: \(error)")
+        }
+
+        let availability = await store.availability(for: .defaultRussian)
+
+        require(availability == .missing, "A different installed model policy must not satisfy the current Russian production policy.")
+    }
+
+    private static func checkExistingModelWithWrongLanguageDoesNotReturnReady() async {
+        let modelFolder = temporaryModelFolder()
+        let store = LocalSTTModelStore(rootDirectory: modelFolder)
+        let wrongLanguagePolicy = WhisperModelPolicy(
+            modelID: WhisperModelPolicy.defaultRussian.modelID,
+            language: "en",
+            approximateSizeInBytes: WhisperModelPolicy.defaultRussian.approximateSizeInBytes,
+            isDebugOnly: false
+        )
+        do {
+            _ = try await store.markInstalled(DownloadedModelArtifact(
+                policy: wrongLanguagePolicy,
+                localURL: modelFolder.appendingPathComponent("prepared-model", isDirectory: true)
+            ))
+        } catch {
+            require(false, "Wrong language model fixture must be markable as installed: \(error)")
+        }
+
+        let availability = await store.availability(for: .defaultRussian)
+
+        require(availability != .ready, "Existing model marker with non-Russian language must not satisfy the Russian policy.")
+    }
+
+    private static func checkExistingModelWithoutInstallManifestRequiresInstall() async {
+        let modelFolder = temporaryModelFolder()
+        let store = LocalSTTModelStore(rootDirectory: modelFolder)
+        let modelDirectory = await store.modelDirectory(for: .defaultRussian)
+        do {
+            try FileManager.default.createDirectory(at: modelDirectory, withIntermediateDirectories: true)
+        } catch {
+            require(false, "Model directory fixture must be creatable: \(error)")
+        }
+
+        let availability = await store.availability(for: .defaultRussian)
+
+        require(availability == .missing, "Model folder without install marker must not be treated as ready.")
     }
 
     private static func checkInstallerPublishesProgress() async {
