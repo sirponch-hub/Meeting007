@@ -23,7 +23,8 @@ Required coverage:
 - VAD behavior: silence-only chunks are suppressed, speech-positive chunks create `SpeechChunk` utterances, short pauses stay inside one utterance, long silence separates utterances, and Stop flushes open speech deterministically.
 - Local STT pipeline behavior: Russian default configuration, `SpeechChunk` input, mic-to-`Me` lane mapping, partial-to-final updates with stable segment identity, stopped-session chunk rejection, missing-model recoverable state, and exportability of final STT segments.
 - Local STT model manager behavior: pinned Russian model policy, missing/invalid/downloading/download-failed recoverable states, ready-model pass-through, explicit prepared-artifact install boundary, and no automatic model download from core checks.
-- Local STT model installer behavior: no download before explicit consent, cancel consent without side effects, confirmed install starts one controlled downloader request, progress/failure states are visible, successful install marks model readiness, installer failure leaves fake STT usable, and no raw audio artifacts are created.
+- Local STT model installer behavior: no download before explicit consent, cancel consent without side effects, confirmed install starts one controlled downloader request, progress/failure states are visible, successful install marks model readiness, existing verified installs skip download, installer failure leaves fake STT usable, and no raw audio artifacts are created.
+- HuggingFace model downloader behavior: pinned Russian source, required WhisperKit CoreML/config entries, staging-before-promotion, per-file SHA-256 manifest writing, checksum mismatch rejection, missing required-file rejection, and offline reuse from `install.json` without network calls.
 - WhisperKit adapter behavior: isolated SwiftPM adapter target compiles against the real `WhisperKit` product, defaults to Russian, accepts only normalized `SpeechChunk` input, returns stable missing-model state without automatic download, maps engine output to transcript segments, and preserves fake STT checks.
 - Completed-session runtime history after Stop.
 - In-memory history deduplication and newest-first ordering.
@@ -39,6 +40,7 @@ Use deterministic fixtures:
 - Synthetic PCM frames for VAD and sample-clock timing.
 - Fake local STT engine returning known partial and final segments.
 - Fake WhisperKit transcription engine for adapter contract checks without model files.
+- Fake HuggingFace repository and file fetcher for installer checks without network or a 626 MB model download.
 - Optional local WhisperKit model path for manual spike proof; ordinary checks must not require downloading or committing model files.
 - Temporary SQLite database.
 - Temporary Markdown output folder.
@@ -101,6 +103,9 @@ Use deterministic fixtures:
 - Verify changing `Transcript folder` affects the next Markdown export.
 - Verify reset returns new exports to `~/Documents/Meeting007/Transcripts/`.
 - Verify no audio, SQLite, REST/MCP, telemetry, or cloud artifacts are created by Markdown export.
+- In Settings, install the Russian model after explicit confirmation and verify progress moves through download/verify/install to Ready.
+- Relaunch the app after a successful model install and verify Settings shows Ready without starting another download.
+- Corrupt or remove one local model file in the app model folder and verify the model is no longer shown as Ready.
 - Verify REST transcript matches Markdown.
 - Verify MCP transcript matches REST.
 - Connect Google Calendar and verify meeting title/topic and participants are imported into local meeting metadata.

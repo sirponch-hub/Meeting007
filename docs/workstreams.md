@@ -49,6 +49,21 @@ Remind the user to consider extra skills or MCP/connectors when these moments ar
 
 ## Current Workstreams
 
+## Real HuggingFace Model Downloader + Checksum
+
+- Status: Ready for Review
+- Owner: Codex + BA/UX/Architecture/QA/Developer agents
+- User outcome: User can install the real local Russian transcription model from Settings after explicit consent, and Meeting007 verifies the downloaded model before it ever reports local transcription as ready.
+- Scope: Add production `HuggingFaceModelDownloader`, pinned `argmaxinc/whisperkit-coreml` source for `openai_whisper-large-v3-v20240930_626MB`, staging folder download, required CoreML/config file validation, per-file SHA-256 calculation, HuggingFace LFS checksum comparison when available, verified `install.json`, app wiring to the real downloader, and offline reuse of existing valid installs without re-download.
+- Out of scope: Wiring real WhisperKit into active recording, Russian accuracy benchmark, multi-model picker, model delete/repair UI, resumable downloads after app relaunch, custom model folder setting, raw audio retention, cloud STT, accounts, hosted backend, and diarization.
+- Docs touched: `docs/architecture.md`, `docs/security-privacy.md`, `docs/testing.md`, `docs/workstreams.md`.
+- Verification: `swift run Meeting007CoreChecks` passed; `swift build --product Meeting007App` passed with sandbox escalation for Swift/clang cache access.
+- Gates: BA confirmed Settings-only explicit install, trusted HuggingFace source, no hidden download, and safe failure; UX confirmed no new main UI and user-facing statuses only; architecture required pinned source, staging, manifest/checksum, install marker written last, no WhisperKit auto-download, and no audio upload; QA defined BDD checks for consent, source, progress, checksum, reuse, cancellation, failure safety, and local-first privacy; Developer/TDD defined red checks before implementation; user acceptance pending; merge pending.
+- Subagents: BA `019eca3c-866c-7a52-93c5-04d997f9936f`, Architecture `019eca3c-9eba-7eb0-be45-e89701f026cd`, UX `019eca3d-4864-74f1-bceb-5e73ed698579`, QA `019eca3d-7062-7202-bbc0-c04b73e09b99`, Developer/TDD `019eca3f-5ddf-79a1-9781-1f79850988ef`.
+- TDD/BDD evidence: Added checks for pinned HuggingFace source, staging-before-promotion, verified manifest writing, checksum mismatch rejection, missing required-file rejection, existing valid install skipping download, wrong policy/language/manifest rejection, progress/failure state, fake STT survival after installer failure, and no audio artifacts.
+- Open decisions: Whether to replace short revision `7235bbd` with a full commit SHA from a live metadata lookup before release, whether to add a checked-in signed hash manifest for stronger supply-chain protection, disk-space preflight UX, model delete/repair UX, and real WhisperKit runtime enablement.
+- Handoff notes: Ordinary automated checks use fake HuggingFace repository/fetcher fixtures and do not require network or a 626 MB download. The app now uses the real downloader behind the existing confirmation sheet, so manual QA can trigger the large download intentionally from Settings.
+
 ## Consented Model Download Installer
 
 - Status: Ready for Review

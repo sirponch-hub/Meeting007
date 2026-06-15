@@ -72,7 +72,7 @@ final class RecordingShellViewModel: ObservableObject {
         let resolvedModelManager = modelManager ?? defaultModelStore
         self.modelManager = resolvedModelManager
         self.modelInstaller = modelInstaller ?? LocalSTTModelInstaller(
-            downloader: UnconfiguredModelDownloader(),
+            downloader: HuggingFaceModelDownloader(),
             store: defaultModelStore
         )
         let effectiveSTTPipeline = sttPipeline ?? LocalSTTPipeline(
