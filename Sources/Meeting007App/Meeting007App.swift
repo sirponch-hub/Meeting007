@@ -186,23 +186,26 @@ final class RecordingShellViewModel: ObservableObject {
         copyFeedbackText = nil
         markdownExportFeedbackText = nil
         state = .stopping
+        transcriptionStatusText = "Finalizing local transcript..."
         stopTimer()
-        stopTranscriptPreviewTimer()
 
         Task {
             let currentSessionID = await controller.currentSession()?.id
             let nextState = await controller.stopManualRecording()
             let frozenSegments: [TranscriptSegment]
             if let currentSessionID {
+                previewSegments = await sttPipeline.visibleSegments()
                 frozenSegments = await sttPipeline.stop(sessionID: currentSessionID)
             } else {
                 frozenSegments = previewSegments
             }
             await transcriptPreviewController.stop()
             previewSegments = frozenSegments
+            stopTranscriptPreviewTimer()
             apply(nextState)
             if nextState == .stopped {
                 microphoneStatusModel.update(.idle)
+                transcriptionStatusText = "Local transcript finalized"
             }
             await saveCompletedSessionIfNeeded(state: nextState, segments: frozenSegments)
         }
