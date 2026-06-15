@@ -17,9 +17,9 @@ public struct VADSpeechChunker: Sendable {
         }
 
         public static let `default` = Configuration(
-            speechLevelThreshold: 0.018,
-            trailingSilenceDuration: 0.7,
-            maximumSpeechDuration: 25
+            speechLevelThreshold: 0.01,
+            trailingSilenceDuration: 0.4,
+            maximumSpeechDuration: 5
         )
     }
 

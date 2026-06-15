@@ -39,6 +39,8 @@ struct Meeting007CoreChecks {
         checkVADKeepsShortPauseInsideOneUtterance()
         checkVADSeparatesSpeechAfterLongSilence()
         checkVADFlushFinalizesOpenSpeechOnStop()
+        checkDefaultVADConfigurationTargetsLiveMeetingSpeech()
+        checkVADChunksContinuousFastSpeechForLiveMeetings()
         await checkRuntimeAudioChunksDoNotPersistIntoMarkdown()
         await checkLocalSTTDefaultsToRussian()
         checkWhisperModelPolicyDefaultsToRussianPinnedModel()
@@ -803,6 +805,34 @@ struct Meeting007CoreChecks {
         require(flushed.count == 1, "Stop must flush active speech so the last spoken words are not lost.")
         require(flushed.first?.isFinalInUtterance == true, "Stop-flushed speech chunks must be final utterance boundaries.")
         require(late.isEmpty, "VAD must reject late PCM after Stop.")
+    }
+
+    private static func checkDefaultVADConfigurationTargetsLiveMeetingSpeech() {
+        let configuration = VADSpeechChunker.Configuration.default
+
+        require(configuration.speechLevelThreshold <= 0.012, "Default VAD must catch quieter meeting speech instead of dropping low-volume words.")
+        require(configuration.trailingSilenceDuration <= 0.45, "Default VAD must close speech windows quickly enough for live meeting feedback.")
+        require(configuration.maximumSpeechDuration <= 6, "Default VAD must not wait for long monologues before sending audio to local STT.")
+    }
+
+    private static func checkVADChunksContinuousFastSpeechForLiveMeetings() {
+        var vad = VADSpeechChunker(configuration: .default)
+        let sessionID = UUID()
+        var emitted: [SpeechChunk] = []
+
+        vad.begin(sessionID: sessionID)
+        for index in 0..<24 {
+            emitted.append(contentsOf: vad.receive(makeCapturedAudioChunk(
+                sessionID: sessionID,
+                startedAt: Double(index) * 0.25,
+                amplitude: 0.08,
+                duration: 0.25
+            )))
+        }
+
+        require(!emitted.isEmpty, "VAD must emit a speech chunk during continuous fast speech without waiting for a long pause.")
+        require(emitted.first?.duration ?? 0 <= 6, "Continuous speech chunks must stay short enough for live transcription.")
+        require(emitted.first?.samples.isEmpty == false, "Continuous speech chunks must carry PCM samples to STT.")
     }
 
     private static func checkRuntimeAudioChunksDoNotPersistIntoMarkdown() async {
