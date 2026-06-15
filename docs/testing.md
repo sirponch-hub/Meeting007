@@ -18,7 +18,7 @@ Required coverage:
 - Markdown export.
 - Markdown file writer path, filename, folder creation, temp-file cleanup, and local-only scope.
 - Markdown transcript folder setting, default folder behavior, selected-folder persistence, write-access validation, and recoverable unavailable-folder errors.
-- Microphone recording lifecycle with fake capture: Start opens one mic lane, Stop closes it, late chunks are rejected, chunks remain session/lane/timing aware, sample-bearing PCM stays in memory, and microphone start failures surface stable user-facing errors.
+- Microphone recording lifecycle with fake capture: Start opens one mic lane, Stop closes it, late chunks are rejected, chunks remain session/lane/timing aware, selected microphone UID persists locally, sample-bearing PCM stays in memory, and microphone start failures surface stable user-facing errors.
 - Runtime-only audio behavior: PCM is downmixed/resampled to mono 16 kHz, runtime chunks do not create raw audio files, Stop clears buffers, and Markdown export does not reference audio artifacts or sample metadata.
 - VAD behavior: silence-only chunks are suppressed, speech-positive chunks create `SpeechChunk` utterances, short pauses stay inside one utterance, long silence separates utterances, and Stop flushes open speech deterministically.
 - Local STT pipeline behavior: Russian default configuration, `SpeechChunk` input, mic-to-`Me` lane mapping, partial-to-final updates with stable segment identity, stopped-session chunk rejection, missing-model recoverable state, and exportability of final STT segments.
@@ -67,6 +67,9 @@ Use deterministic fixtures:
 - Manual start/stop recording.
 - Start recording from fresh microphone permission state and verify macOS asks for access.
 - Grant microphone access and verify the mic lane shows activity while speaking.
+- Open Settings, verify available microphone inputs appear under Audio Input, choose the intended microphone, and verify the main mic lane names that input before recording.
+- Start recording with the selected microphone and verify the mic lane level responds to that physical input.
+- Disconnect or make the selected microphone unavailable and verify the app shows a recoverable input error instead of silently using another microphone.
 - Speak Russian into the microphone and verify live transcript text appears only after speech is detected.
 - With the verified Russian model installed, verify transcript text reflects actual spoken Russian rather than the old deterministic fake phrase.
 - With the model missing or corrupted, verify recording remains controllable and the transcript panel says transcription is unavailable without fake transcript text.

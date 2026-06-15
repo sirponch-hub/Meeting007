@@ -45,6 +45,49 @@ public enum MicrophoneCaptureStatus: Equatable, Sendable {
     }
 }
 
+public struct MicrophoneInputDevice: Identifiable, Equatable, Sendable {
+    public let id: UInt32
+    public let uid: String
+    public let name: String
+    public let isSystemDefault: Bool
+
+    public init(id: UInt32, uid: String, name: String, isSystemDefault: Bool = false) {
+        self.id = id
+        self.uid = uid
+        self.name = name
+        self.isSystemDefault = isSystemDefault
+    }
+}
+
+public struct MicrophoneDeviceSelectionSettings {
+    public static let defaultStorageKey = "meeting007.microphoneDeviceUID"
+
+    private let defaults: UserDefaults
+    private let storageKey: String
+
+    public init(
+        defaults: UserDefaults = .standard,
+        storageKey: String = Self.defaultStorageKey
+    ) {
+        self.defaults = defaults
+        self.storageKey = storageKey
+    }
+
+    public var selectedDeviceUID: String {
+        get {
+            defaults.string(forKey: storageKey) ?? ""
+        }
+        set {
+            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                defaults.removeObject(forKey: storageKey)
+            } else {
+                defaults.set(trimmed, forKey: storageKey)
+            }
+        }
+    }
+}
+
 public struct CapturedAudioChunk: Equatable, Sendable {
     public let sessionID: UUID
     public let lane: CaptureLane

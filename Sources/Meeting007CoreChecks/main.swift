@@ -30,6 +30,8 @@ struct Meeting007CoreChecks {
         await checkRecordingStopStopsMicrophoneLane()
         await checkMicrophoneChunksCarrySessionAndLane()
         await checkMicrophoneStartFailureReturnsStableError()
+        checkMicrophoneDeviceSelectionPersistsChosenInput()
+        checkMicrophoneDeviceSelectionCanReturnToSystemInput()
         checkRuntimeAudioNormalizerDownmixesAndResamplesToMono16k()
         await checkRuntimeAudioConsumerAcceptsOnlyActiveSampleBearingChunks()
         await checkRuntimeAudioConsumerDoesNotBlockCaptureOnSlowTranscription()
@@ -672,6 +674,33 @@ struct Meeting007CoreChecks {
         require(normalized.channelCount == 1, "Runtime PCM must be downmixed to mono for VAD/STT.")
         require(!normalized.samples.isEmpty, "Runtime PCM normalization must preserve sample payload in memory.")
         require(normalized.byteCount == normalized.samples.count * MemoryLayout<Float>.size, "Runtime PCM byte count must match Float sample payload.")
+    }
+
+    private static func checkMicrophoneDeviceSelectionPersistsChosenInput() {
+        let suiteName = "Meeting007CoreChecks.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+        var settings = MicrophoneDeviceSelectionSettings(defaults: defaults)
+
+        settings.selectedDeviceUID = "external-usb-mic"
+
+        require(settings.selectedDeviceUID == "external-usb-mic", "Selected microphone UID must persist for future recordings.")
+    }
+
+    private static func checkMicrophoneDeviceSelectionCanReturnToSystemInput() {
+        let suiteName = "Meeting007CoreChecks.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+        var settings = MicrophoneDeviceSelectionSettings(defaults: defaults)
+
+        settings.selectedDeviceUID = "external-usb-mic"
+        settings.selectedDeviceUID = ""
+
+        require(settings.selectedDeviceUID.isEmpty, "Clearing the selected microphone must return Meeting007 to the macOS system input.")
     }
 
     private static func checkRuntimeAudioConsumerAcceptsOnlyActiveSampleBearingChunks() async {

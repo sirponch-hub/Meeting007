@@ -75,6 +75,8 @@ Enhancement:
 - The app must keep microphone and system audio as separate lanes.
 - The app must label local microphone speech as `Me` and remote/system audio as `Others` in v1.
 - The first real capture slice must prove local microphone capture with visible `Me` lane activity before real local STT is connected.
+- The app must show available microphone inputs in Settings, let the user choose the input used for new recordings, and persist that local selection.
+- If the selected microphone is missing or cannot be opened, the app must show a recoverable input error instead of silently recording a different source.
 - The app must route live transcript text through a local STT pipeline boundary before the production Whisper runtime is connected.
 - The UI must not imply that deterministic STT pipeline text is production Whisper output until real local Whisper runtime ships.
 - The app must support Russian as the default transcription language.
@@ -116,6 +118,7 @@ Enhancement:
 ## Acceptance Criteria
 
 - User can start and stop recording manually on an Apple Silicon Mac.
+- User can see and choose the microphone used for new recordings before starting a meeting.
 - User can see live transcript text while a meeting is active.
 - User can copy the last 5 minutes and the full transcript during a meeting.
 - Stopping a meeting creates a Markdown transcript and SQLite index entry.

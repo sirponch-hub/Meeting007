@@ -1,5 +1,7 @@
 import AppKit
 import AVFoundation
+import AudioToolbox
+import CoreAudio
 import SwiftUI
 import Meeting007Core
 import Meeting007WhisperKit
@@ -37,11 +39,15 @@ final class RecordingShellViewModel: ObservableObject {
     @Published private(set) var transcriptFolderURL: URL
     @Published private(set) var transcriptStorageFeedbackText: String?
     @Published private(set) var microphoneStatus: MicrophoneCaptureStatus = .idle
+    @Published private(set) var microphoneDevices: [MicrophoneInputDevice] = []
+    @Published var selectedMicrophoneDeviceUID = ""
+    @Published private(set) var microphoneDeviceFeedbackText: String?
     @Published private(set) var transcriptionStatusText = "Local transcription ready"
     @Published private(set) var transcriptionModelAvailability: LocalSTTModelAvailability = .missing
     @Published private(set) var transcriptionModelInstallState: LocalSTTModelInstallState = .notInstalled
 
     private let microphoneStatusModel: MicrophoneCaptureStatusModel
+    private var microphoneDeviceSettings: MicrophoneDeviceSelectionSettings
     private let modelManager: any LocalSTTModelManaging
     private let modelInstaller: LocalSTTModelInstaller
     private let controller: RecordingSessionController
@@ -59,6 +65,7 @@ final class RecordingShellViewModel: ObservableObject {
     init(
         controller: RecordingSessionController? = nil,
         microphoneStatusModel: MicrophoneCaptureStatusModel = MicrophoneCaptureStatusModel(),
+        microphoneDeviceSettings: MicrophoneDeviceSelectionSettings = MicrophoneDeviceSelectionSettings(),
         modelManager: (any LocalSTTModelManaging)? = nil,
         modelInstaller: LocalSTTModelInstaller? = nil,
         transcriptPreviewController: LiveTranscriptPreviewController = LiveTranscriptPreviewController(),
@@ -69,6 +76,7 @@ final class RecordingShellViewModel: ObservableObject {
         transcriptFileWriter: (any TranscriptFileWriting)? = nil
     ) {
         self.microphoneStatusModel = microphoneStatusModel
+        self.microphoneDeviceSettings = microphoneDeviceSettings
         let defaultModelStore = LocalSTTModelStore()
         let resolvedModelManager = modelManager ?? defaultModelStore
         self.modelManager = resolvedModelManager
@@ -81,7 +89,10 @@ final class RecordingShellViewModel: ObservableObject {
         )
         self.controller = controller ?? RecordingSessionController(
             captureDriver: MicrophoneRecordingCaptureDriver(
-                microphone: AVAudioEngineMicrophoneCaptureDriver(statusModel: microphoneStatusModel),
+                microphone: AVAudioEngineMicrophoneCaptureDriver(
+                    statusModel: microphoneStatusModel,
+                    deviceSettings: microphoneDeviceSettings
+                ),
                 consumer: RuntimeOnlyAudioChunkConsumer(speechChunkConsumer: effectiveSTTPipeline)
             )
         )
@@ -94,11 +105,13 @@ final class RecordingShellViewModel: ObservableObject {
         self.transcriptFolderURL = folderURL
         self.transcriptFileWriter = transcriptFileWriter ?? LocalMarkdownTranscriptFileWriter(folderURL: folderURL)
         self.microphoneStatus = microphoneStatusModel.status
+        self.selectedMicrophoneDeviceUID = microphoneDeviceSettings.selectedDeviceUID
         self.microphoneStatusModel.onChange = { [weak self] status in
             self?.microphoneStatus = status
         }
         Task {
             await refreshTranscriptionModelAvailability()
+            refreshMicrophoneDevices()
         }
     }
 
@@ -150,6 +163,17 @@ final class RecordingShellViewModel: ObservableObject {
         }
 
         return false
+    }
+
+    var selectedMicrophoneDisplayName: String {
+        guard !selectedMicrophoneDeviceUID.isEmpty else {
+            if let systemDefault = microphoneDevices.first(where: { $0.isSystemDefault }) {
+                return "System Input · \(systemDefault.name)"
+            }
+            return "System Input"
+        }
+
+        return microphoneDevices.first(where: { $0.uid == selectedMicrophoneDeviceUID })?.name ?? "Missing microphone"
     }
 
     func primaryAction() {
@@ -217,6 +241,26 @@ final class RecordingShellViewModel: ObservableObject {
         }
 
         NSWorkspace.shared.open(url)
+    }
+
+    func refreshMicrophoneDevices() {
+        let devices = CoreAudioMicrophoneDeviceProvider.inputDevices()
+        microphoneDevices = devices
+        if selectedMicrophoneDeviceUID.isEmpty || devices.contains(where: { $0.uid == selectedMicrophoneDeviceUID }) {
+            microphoneDeviceFeedbackText = devices.isEmpty ? "No microphone inputs found." : nil
+            return
+        }
+
+        selectedMicrophoneDeviceUID = ""
+        microphoneDeviceSettings.selectedDeviceUID = ""
+        microphoneDeviceFeedbackText = "The previously selected microphone is not available. Meeting007 will use the system input."
+    }
+
+    func selectMicrophoneDevice(uid: String) {
+        selectedMicrophoneDeviceUID = uid
+        microphoneDeviceSettings.selectedDeviceUID = uid
+        refreshMicrophoneDevices()
+        microphoneDeviceFeedbackText = uid.isEmpty ? "Meeting007 will use the macOS system input." : "Meeting007 will use the selected microphone for new recordings."
     }
 
     func revealMarkdownFile(for session: CompletedRecordingSession) {
@@ -590,15 +634,106 @@ final class MicrophoneCaptureStatusModel: ObservableObject {
     }
 }
 
+enum CoreAudioMicrophoneDeviceProvider {
+    static func inputDevices() -> [MicrophoneInputDevice] {
+        let defaultInputID = defaultInputDeviceID()
+        return allAudioDeviceIDs().compactMap { deviceID in
+            guard hasInputStreams(deviceID),
+                  let uid = stringProperty(kAudioDevicePropertyDeviceUID, for: deviceID),
+                  let name = stringProperty(kAudioObjectPropertyName, for: deviceID) else {
+                return nil
+            }
+
+            return MicrophoneInputDevice(
+                id: UInt32(deviceID),
+                uid: uid,
+                name: name,
+                isSystemDefault: deviceID == defaultInputID
+            )
+        }
+        .sorted { lhs, rhs in
+            if lhs.isSystemDefault != rhs.isSystemDefault {
+                return lhs.isSystemDefault
+            }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    private static func allAudioDeviceIDs() -> [AudioDeviceID] {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var dataSize: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &dataSize) == noErr else {
+            return []
+        }
+
+        let count = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
+        var devices = Array(repeating: AudioDeviceID(), count: count)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &dataSize, &devices) == noErr else {
+            return []
+        }
+        return devices
+    }
+
+    private static func defaultInputDeviceID() -> AudioDeviceID? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var deviceID = AudioDeviceID()
+        var dataSize = UInt32(MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &dataSize, &deviceID) == noErr else {
+            return nil
+        }
+        return deviceID
+    }
+
+    private static func hasInputStreams(_ deviceID: AudioDeviceID) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreams,
+            mScope: kAudioDevicePropertyScopeInput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var dataSize: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &dataSize) == noErr else {
+            return false
+        }
+        return dataSize > 0
+    }
+
+    private static func stringProperty(_ selector: AudioObjectPropertySelector, for deviceID: AudioDeviceID) -> String? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var value: CFString = "" as CFString
+        var dataSize = UInt32(MemoryLayout<CFString>.size)
+        let result = withUnsafeMutablePointer(to: &value) { pointer in
+            AudioObjectGetPropertyData(deviceID, &address, 0, nil, &dataSize, pointer)
+        }
+        guard result == noErr else {
+            return nil
+        }
+        return value as String
+    }
+}
+
 final class AVAudioEngineMicrophoneCaptureDriver: MicrophoneCaptureDriver, @unchecked Sendable {
     private let statusModel: MicrophoneCaptureStatusModel
+    private let deviceSettings: MicrophoneDeviceSelectionSettings
     private let stateLock = NSLock()
     private var engine: AVAudioEngine?
     private var activeSessionID: UUID?
     private var emittedSampleCount = 0
 
-    init(statusModel: MicrophoneCaptureStatusModel) {
+    init(statusModel: MicrophoneCaptureStatusModel, deviceSettings: MicrophoneDeviceSelectionSettings = MicrophoneDeviceSelectionSettings()) {
         self.statusModel = statusModel
+        self.deviceSettings = deviceSettings
     }
 
     func start(session: RecordingSession, consumer: any AudioChunkConsumer) async throws {
@@ -617,6 +752,7 @@ final class AVAudioEngineMicrophoneCaptureDriver: MicrophoneCaptureDriver, @unch
 
         let nextEngine = AVAudioEngine()
         let inputNode = nextEngine.inputNode
+        try await applySelectedInputDevice(to: inputNode)
         let format = inputNode.outputFormat(forBus: 0)
 
         guard format.sampleRate > 0, format.channelCount > 0 else {
@@ -708,6 +844,47 @@ final class AVAudioEngineMicrophoneCaptureDriver: MicrophoneCaptureDriver, @unch
         }
     }
 
+    private func applySelectedInputDevice(to inputNode: AVAudioInputNode) async throws {
+        let selectedUID = deviceSettings.selectedDeviceUID
+        guard !selectedUID.isEmpty else {
+            return
+        }
+
+        guard let selectedDevice = CoreAudioMicrophoneDeviceProvider.inputDevices().first(where: { $0.uid == selectedUID }) else {
+            await updateStatus(.unavailable("Selected microphone is not available. Choose another input in Settings."))
+            throw RecordingFailure(
+                code: "microphone_device_unavailable",
+                message: "Selected microphone is not available. Choose another input in Settings."
+            )
+        }
+
+        guard let audioUnit = inputNode.audioUnit else {
+            await updateStatus(.unavailable("Selected microphone could not be opened. Choose another input in Settings."))
+            throw RecordingFailure(
+                code: "microphone_device_open_failed",
+                message: "Selected microphone could not be opened. Choose another input in Settings."
+            )
+        }
+
+        var deviceID = AudioDeviceID(selectedDevice.id)
+        let result = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &deviceID,
+            UInt32(MemoryLayout<AudioDeviceID>.size)
+        )
+
+        guard result == noErr else {
+            await updateStatus(.unavailable("Selected microphone could not be used. Choose another input in Settings."))
+            throw RecordingFailure(
+                code: "microphone_device_selection_failed",
+                message: "Selected microphone could not be used. Choose another input in Settings."
+            )
+        }
+    }
+
     @MainActor
     private func updateStatus(_ status: MicrophoneCaptureStatus) {
         statusModel.update(status)
@@ -784,6 +961,10 @@ struct RecordingShellView: View {
                 SettingsView(
                     folderURL: viewModel.transcriptFolderURL,
                     feedbackText: viewModel.transcriptStorageFeedbackText,
+                    microphoneDevices: viewModel.microphoneDevices,
+                    selectedMicrophoneDeviceUID: viewModel.selectedMicrophoneDeviceUID,
+                    microphoneDeviceFeedbackText: viewModel.microphoneDeviceFeedbackText,
+                    isRecording: viewModel.state.isRecording,
                     modelAvailability: viewModel.transcriptionModelAvailability,
                     modelInstallState: viewModel.transcriptionModelInstallState,
                     modelPolicy: .defaultRussian,
@@ -791,6 +972,8 @@ struct RecordingShellView: View {
                     onRevealFolder: viewModel.revealTranscriptFolder,
                     onCopyPath: viewModel.copyTranscriptFolderPath,
                     onResetToDefault: viewModel.resetTranscriptFolderToDefault,
+                    onSelectMicrophoneDevice: viewModel.selectMicrophoneDevice,
+                    onRefreshMicrophoneDevices: viewModel.refreshMicrophoneDevices,
                     onRefreshModelStatus: {
                         Task {
                             await viewModel.refreshTranscriptionModelAvailability()
@@ -927,6 +1110,7 @@ struct RecordingShellView: View {
         TranscriptPanel(
             state: viewModel.state,
             microphoneStatus: viewModel.microphoneStatus,
+            microphoneName: viewModel.selectedMicrophoneDisplayName,
             transcriptionStatusText: viewModel.transcriptionStatusText,
             hasStartedPreview: viewModel.hasStartedPreview,
             segments: viewModel.previewSegments,
@@ -947,6 +1131,10 @@ enum ShellSection: Equatable {
 struct SettingsView: View {
     let folderURL: URL
     let feedbackText: String?
+    let microphoneDevices: [MicrophoneInputDevice]
+    let selectedMicrophoneDeviceUID: String
+    let microphoneDeviceFeedbackText: String?
+    let isRecording: Bool
     let modelAvailability: LocalSTTModelAvailability
     let modelInstallState: LocalSTTModelInstallState
     let modelPolicy: WhisperModelPolicy
@@ -954,6 +1142,8 @@ struct SettingsView: View {
     let onRevealFolder: () -> Void
     let onCopyPath: () -> Void
     let onResetToDefault: () -> Void
+    let onSelectMicrophoneDevice: (String) -> Void
+    let onRefreshMicrophoneDevices: () -> Void
     let onRefreshModelStatus: () -> Void
     let onPrepareModelInstall: () -> Void
     let onConfirmModelInstall: () -> Void
@@ -989,6 +1179,23 @@ struct SettingsView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8))
 
                 VStack(alignment: .leading, spacing: 14) {
+                    Text("Audio Input")
+                        .font(.headline)
+
+                    MicrophoneInputSettingRow(
+                        devices: microphoneDevices,
+                        selectedDeviceUID: selectedMicrophoneDeviceUID,
+                        feedbackText: microphoneDeviceFeedbackText,
+                        isRecording: isRecording,
+                        onSelectDevice: onSelectMicrophoneDevice,
+                        onRefresh: onRefreshMicrophoneDevices
+                    )
+                }
+                .padding(16)
+                .background(Color(nsColor: .controlBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                VStack(alignment: .leading, spacing: 14) {
                     Text("Transcription")
                         .font(.headline)
 
@@ -1010,6 +1217,90 @@ struct SettingsView: View {
             .padding(.horizontal, 24)
             .padding(.vertical, 22)
         }
+    }
+}
+
+struct MicrophoneInputSettingRow: View {
+    let devices: [MicrophoneInputDevice]
+    let selectedDeviceUID: String
+    let feedbackText: String?
+    let isRecording: Bool
+    let onSelectDevice: (String) -> Void
+    let onRefresh: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Label("Microphone", systemImage: "mic")
+                    .font(.callout.weight(.semibold))
+                Spacer()
+                Text(selectedTitle)
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            Text("Choose the input Meeting007 uses for new recordings. Selection is locked while a recording is active.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 10) {
+                Picker("Microphone", selection: selectionBinding) {
+                    Text(systemInputTitle).tag("")
+                    ForEach(devices) { device in
+                        Text(device.name + (device.isSystemDefault ? " (System Default)" : "")).tag(device.uid)
+                    }
+                }
+                .labelsHidden()
+                .frame(minWidth: 260)
+                .disabled(isRecording || devices.isEmpty)
+
+                Button("Refresh", action: onRefresh)
+                    .buttonStyle(.bordered)
+                    .disabled(isRecording)
+            }
+
+            if isRecording {
+                Text("Stop recording before changing the microphone.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if devices.isEmpty {
+                Text("No microphone inputs found. Check the device connection and macOS microphone permission.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            } else if let feedbackText {
+                Text(feedbackText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var selectionBinding: Binding<String> {
+        Binding(
+            get: { selectedMicrophoneIsAvailable ? selectedDeviceUID : "" },
+            set: { uid in
+                onSelectDevice(uid)
+            }
+        )
+    }
+
+    private var selectedTitle: String {
+        guard !selectedDeviceUID.isEmpty else {
+            return systemInputTitle
+        }
+        return devices.first(where: { $0.uid == selectedDeviceUID })?.name ?? "Missing microphone"
+    }
+
+    private var selectedMicrophoneIsAvailable: Bool {
+        selectedDeviceUID.isEmpty || devices.contains { $0.uid == selectedDeviceUID }
+    }
+
+    private var systemInputTitle: String {
+        if let systemDefault = devices.first(where: { $0.isSystemDefault }) {
+            return "System Input (\(systemDefault.name))"
+        }
+        return "System Input"
     }
 }
 
@@ -1530,6 +1821,7 @@ struct RecentRecordingTreeRow: View {
 struct TranscriptPanel: View {
     let state: RecordingState
     let microphoneStatus: MicrophoneCaptureStatus
+    let microphoneName: String
     let transcriptionStatusText: String
     let hasStartedPreview: Bool
     let segments: [TranscriptSegment]
@@ -1576,7 +1868,7 @@ struct TranscriptPanel: View {
                         .foregroundStyle(.secondary)
                 }
 
-                MicrophoneLaneIndicator(status: microphoneStatus, isRecording: state.isRecording)
+                MicrophoneLaneIndicator(status: microphoneStatus, microphoneName: microphoneName, isRecording: state.isRecording)
                 LocalTranscriptionStatusRow(statusText: transcriptionStatusText, isRecording: state.isRecording)
 
                 if shouldShowPreview {
@@ -1628,6 +1920,7 @@ struct TranscriptEmptyState: View {
 
 struct MicrophoneLaneIndicator: View {
     let status: MicrophoneCaptureStatus
+    let microphoneName: String
     let isRecording: Bool
 
     var body: some View {
@@ -1637,8 +1930,14 @@ struct MicrophoneLaneIndicator: View {
                 .foregroundStyle(tint)
                 .frame(width: 18)
 
-            Text(status.userFacingLabel)
-                .font(.callout.weight(.semibold))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(status.userFacingLabel)
+                    .font(.callout.weight(.semibold))
+                Text(isRecording ? "\(microphoneName) · audio stays local" : microphoneName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
 
             if isRecording {
                 GeometryReader { proxy in
@@ -1661,7 +1960,7 @@ struct MicrophoneLaneIndicator: View {
         .background(.thinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Microphone lane \(status.userFacingLabel)")
+        .accessibilityLabel("Microphone lane \(status.userFacingLabel), \(microphoneName)")
     }
 
     private var iconName: String {
