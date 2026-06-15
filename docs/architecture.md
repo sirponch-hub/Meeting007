@@ -69,16 +69,18 @@ Current implemented STT boundary:
 - `FakeRussianSpeechTranscriber` provides deterministic Russian partial/final segments for CI-safe checks and UI wiring without cloud or model files.
 - `WhisperModelPolicy.defaultRussian` pins `large-v3-v20240930_626MB` as the production Russian model candidate and keeps `tiny` debug-only.
 - `LocalSTTModelManaging` owns model readiness checks without downloading or uploading anything.
+- `LocalSTTModelPathProviding` extends readiness with a verified local model directory. A caller receives a usable path only after the same local `install.json`, required-file, size, and SHA-256 checks pass.
 - `ModelManagedSpeechTranscriber` blocks transcription when the pinned model is missing, invalid, downloading, or failed, and passes through to the current transcriber only when the model is ready.
 - `Meeting007WhisperKit` is an isolated adapter target that depends on the upstream `argmax-oss-swift` Swift package product `WhisperKit` while keeping `Meeting007Core` dependency-light and fast to test.
 - `WhisperKitSpeechTranscriber` compiles behind the same `SpeechTranscribing` protocol and accepts `SpeechChunk` input only; it does not know about `AVAudioEngine`, VAD internals, Markdown, SQLite, REST, or MCP.
 - The WhisperKit adapter defaults to Russian, requires model readiness before transcribing, and deliberately does not initiate automatic model download.
+- The app production composition now uses `WhisperKitTranscriptionPipelineFactory` with `LocalSTTModelStore` as the verified model path provider. `FakeRussianSpeechTranscriber` remains for explicit checks/dev injection only, not the default recording path.
 - `LocalSTTModelInstaller` owns explicit-consent install lifecycle separately from transcription: pending consent, progress, verification, ready, cancellation, and failure.
 - `LocalSTTModelStore` checks the app-owned model folder under Application Support and exposes readiness through `LocalSTTModelManaging`; model files are never stored in the Markdown transcript folder.
 - `HuggingFaceModelDownloader` is the production installer boundary for the current Russian model. It lists files from `argmaxinc/whisperkit-coreml`, pins the `openai_whisper-large-v3-v20240930_626MB` folder at revision `7235bbd`, downloads files into an app-owned `.staging/<requestID>/` folder, verifies required CoreML/config entries, computes local SHA-256 for every file, compares HuggingFace LFS SHA-256 when available, then promotes the verified folder into the final model path.
 - `install.json` is written only after successful verification and records policy ID, language, repository, revision, folder, actual bytes, file count, per-file sizes, per-file SHA-256, `source: explicit-user-consent`, and `status: installed`.
 - Existing installs are considered ready only when `install.json` matches the current Russian policy and all recorded files still exist with matching sizes and SHA-256 values. A folder without a valid marker or with corrupted files is not ready and does not trigger automatic repair.
-- The app Settings surface shows Russian model status and starts install only after a confirmation sheet. Real WhisperKit runtime enablement in the app recording flow remains a separate future slice.
+- The app Settings surface shows Russian model status and starts install only after a confirmation sheet. Real WhisperKit transcription is wired into the app recording flow when the verified model directory is available; partial-rich live streaming and latency tuning remain future slices.
 
 ## Storage
 

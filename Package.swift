@@ -56,7 +56,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "Meeting007App",
-            dependencies: ["Meeting007Core"],
+            dependencies: [
+                "Meeting007Core",
+                "Meeting007WhisperKit"
+            ],
             exclude: ["Info.plist"],
             linkerSettings: [
                 .unsafeFlags([

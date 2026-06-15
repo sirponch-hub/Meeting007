@@ -51,6 +51,8 @@ struct Meeting007CoreChecks {
         await checkExistingModelWithWrongPolicyDoesNotReturnReady()
         await checkExistingModelWithWrongLanguageDoesNotReturnReady()
         await checkExistingModelWithoutInstallManifestRequiresInstall()
+        await checkVerifiedModelDirectoryReturnsReadyPath()
+        await checkVerifiedModelDirectoryRejectsCorruptModelFiles()
         await checkInstallerPublishesProgress()
         await checkSuccessfulInstallReturnsReadyAvailability()
         await checkHuggingFaceDownloaderUsesPinnedRussianSource()
@@ -1022,6 +1024,41 @@ struct Meeting007CoreChecks {
         let availability = await store.availability(for: .defaultRussian)
 
         require(availability == .missing, "Model folder without install marker must not be treated as ready.")
+    }
+
+    private static func checkVerifiedModelDirectoryReturnsReadyPath() async {
+        let modelFolder = temporaryModelFolder()
+        let store = LocalSTTModelStore(rootDirectory: modelFolder)
+        do {
+            _ = try await store.markInstalled(preparedModelArtifact(rootDirectory: modelFolder))
+        } catch {
+            require(false, "Verified model directory fixture must be markable as installed: \(error)")
+        }
+
+        let result = await store.verifiedModelDirectory(for: .defaultRussian)
+        let expectedDirectory = await store.modelDirectory(for: .defaultRussian)
+
+        require(result == .ready(expectedDirectory), "Verified model directory provider must return the exact checked local model path.")
+    }
+
+    private static func checkVerifiedModelDirectoryRejectsCorruptModelFiles() async {
+        let modelFolder = temporaryModelFolder()
+        let store = LocalSTTModelStore(rootDirectory: modelFolder)
+        do {
+            _ = try await store.markInstalled(preparedModelArtifact(rootDirectory: modelFolder))
+            let modelDirectory = await store.modelDirectory(for: .defaultRussian)
+            let corruptFile = modelDirectory.appendingPathComponent("config.json")
+            try Data("corrupted".utf8).write(to: corruptFile)
+        } catch {
+            require(false, "Corrupt model fixture must be writable: \(error)")
+        }
+
+        let result = await store.verifiedModelDirectory(for: .defaultRussian)
+        if case .unavailable(let availability) = result {
+            require(availability != .ready, "Corrupt model files must make verified model directory unavailable.")
+        } else {
+            require(false, "Corrupt model files must not return a usable model path.")
+        }
     }
 
     private static func checkInstallerPublishesProgress() async {

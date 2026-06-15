@@ -8,6 +8,9 @@ struct Meeting007WhisperKitChecks {
         checkWhisperKitAdapterDefaultsToRussian()
         checkWhisperKitAdapterAcceptsSpeechChunkBoundary()
         await checkWhisperKitAdapterRequiresInstalledModel()
+        await checkWhisperKitAdapterBuildsEngineFromVerifiedModelDirectory()
+        await checkWhisperKitAdapterDoesNotBuildEngineForMissingModelDirectory()
+        await checkProductionWhisperKitPipelineDoesNotEmitFakeTextWhenModelMissing()
         await checkWhisperKitAdapterMapsResultToTranscriptSegment()
         await checkWhisperKitFailureDoesNotBreakFakeRussianSTT()
         checkWhisperKitAdapterDoesNotPersistSpeechChunks()
@@ -47,6 +50,62 @@ struct Meeting007WhisperKitChecks {
         )), "Missing local WhisperKit model must return a stable unavailable state.")
         require(segments.isEmpty, "WhisperKit adapter must not transcribe when the model is missing.")
         require(downloadAttempts == 0, "WhisperKit adapter must not start a model download.")
+    }
+
+    private static func checkWhisperKitAdapterBuildsEngineFromVerifiedModelDirectory() async {
+        let verifiedDirectory = URL(fileURLWithPath: "/tmp/Meeting007VerifiedModel", isDirectory: true)
+        let provider = FakeLocalSTTModelPathProvider(result: .ready(verifiedDirectory))
+        let factory = WhisperKitEngineFactorySpy(result: "Реальная локальная транскрибация.")
+        let adapter = WhisperKitSpeechTranscriber(
+            modelPathProvider: provider,
+            engineFactory: factory.makeEngine(modelDirectory:)
+        )
+        let sessionID = UUID()
+
+        let start = await adapter.start(config: STTSessionConfig(sessionID: sessionID))
+        let segments = await adapter.receive(makeSpeechChunk(sessionID: sessionID, startedAt: 3, duration: 1))
+        let requestedPolicies = await provider.requestedPolicies()
+
+        require(start == .ready, "Verified model directory must allow real WhisperKit adapter start.")
+        require(factory.modelDirectories() == [verifiedDirectory], "WhisperKit engine must be built from the verified local model directory.")
+        require(factory.prepareCount() == 1, "WhisperKit engine must be prepared once at session start.")
+        require(requestedPolicies == [.defaultRussian], "WhisperKit adapter must request the pinned Russian model policy.")
+        require(segments.first?.text == "Реальная локальная транскрибация.", "Verified model path adapter must return engine transcript text.")
+    }
+
+    private static func checkWhisperKitAdapterDoesNotBuildEngineForMissingModelDirectory() async {
+        let provider = FakeLocalSTTModelPathProvider(result: .unavailable(.missing))
+        let factory = WhisperKitEngineFactorySpy(result: "не должен вызываться")
+        let adapter = WhisperKitSpeechTranscriber(
+            modelPathProvider: provider,
+            engineFactory: factory.makeEngine(modelDirectory:)
+        )
+
+        let start = await adapter.start(config: STTSessionConfig(sessionID: UUID()))
+        let downloadAttempts = await adapter.automaticDownloadAttempts()
+
+        require(start == .unavailable(TranscriptionFailure(
+            code: "local_stt_model_missing",
+            message: "The Russian transcription model is not installed on this Mac."
+        )), "Missing verified model directory must return stable unavailable state.")
+        require(factory.modelDirectories().isEmpty, "WhisperKit engine must not be built when the model directory is missing.")
+        require(downloadAttempts == 0, "Missing model directory must not trigger automatic download.")
+    }
+
+    private static func checkProductionWhisperKitPipelineDoesNotEmitFakeTextWhenModelMissing() async {
+        let pipeline = WhisperKitTranscriptionPipelineFactory.makeProductionPipeline(
+            modelPathProvider: FakeLocalSTTModelPathProvider(result: .unavailable(.missing))
+        )
+        let sessionID = UUID()
+
+        let start = await pipeline.start(STTSessionConfig(sessionID: sessionID))
+        let segments = await pipeline.receive(makeSpeechChunk(sessionID: sessionID, startedAt: 0, duration: 1))
+
+        require(start == .unavailable(TranscriptionFailure(
+            code: "local_stt_model_missing",
+            message: "The Russian transcription model is not installed on this Mac."
+        )), "Production WhisperKit pipeline must report missing local model.")
+        require(segments.isEmpty, "Production WhisperKit pipeline must not emit fake transcript text when the model is missing.")
     }
 
     private static func checkWhisperKitAdapterMapsResultToTranscriptSegment() async {
@@ -123,10 +182,61 @@ struct Meeting007WhisperKitChecks {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
     }
 
-    private static func require(_ condition: @autoclosure () -> Bool, _ message: String) {
+private static func require(_ condition: @autoclosure () -> Bool, _ message: String) {
         if !condition() {
             fputs("Check failed: \(message)\n", stderr)
             exit(1)
         }
+    }
+}
+
+private final class WhisperKitEngineFactorySpy: @unchecked Sendable {
+    private let lock = NSLock()
+    private let result: String
+    private var directories: [URL] = []
+    private var prepares = 0
+
+    init(result: String) {
+        self.result = result
+    }
+
+    func makeEngine(modelDirectory: URL) -> any WhisperKitTranscriptionEngine {
+        lock.lock()
+        directories.append(modelDirectory)
+        lock.unlock()
+        return PreparedSpyWhisperKitEngine(result: result) { [weak self] in
+            self?.recordPrepare()
+        }
+    }
+
+    func modelDirectories() -> [URL] {
+        lock.lock()
+        defer { lock.unlock() }
+        return directories
+    }
+
+    func prepareCount() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return prepares
+    }
+
+    private func recordPrepare() {
+        lock.lock()
+        prepares += 1
+        lock.unlock()
+    }
+}
+
+private struct PreparedSpyWhisperKitEngine: WhisperKitTranscriptionEngine {
+    let result: String
+    let onPrepare: @Sendable () -> Void
+
+    func prepare() async throws {
+        onPrepare()
+    }
+
+    func transcribe(_ chunk: SpeechChunk, language: String) async throws -> String {
+        result
     }
 }

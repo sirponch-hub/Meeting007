@@ -194,7 +194,7 @@ public actor FakeModelDownloader: ModelDownloading {
     }
 }
 
-public actor LocalSTTModelStore: LocalSTTModelManaging {
+public actor LocalSTTModelStore: LocalSTTModelPathProviding {
     private let rootDirectory: URL
     private let fileManager: FileManager
 
@@ -234,6 +234,15 @@ public actor LocalSTTModelStore: LocalSTTModelManaging {
         } catch {
             return .invalid("Installed model marker could not be verified.")
         }
+    }
+
+    public func verifiedModelDirectory(for policy: WhisperModelPolicy) async -> VerifiedLocalSTTModelDirectory {
+        let availability = await availability(for: policy)
+        guard availability == .ready else {
+            return .unavailable(availability)
+        }
+
+        return .ready(modelDirectory(for: policy))
     }
 
     public func modelDirectory(for policy: WhisperModelPolicy) -> URL {

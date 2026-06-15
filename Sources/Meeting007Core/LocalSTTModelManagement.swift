@@ -67,6 +67,15 @@ public protocol LocalSTTModelManaging: Sendable {
     func availability(for policy: WhisperModelPolicy) async -> LocalSTTModelAvailability
 }
 
+public enum VerifiedLocalSTTModelDirectory: Equatable, Sendable {
+    case ready(URL)
+    case unavailable(LocalSTTModelAvailability)
+}
+
+public protocol LocalSTTModelPathProviding: LocalSTTModelManaging {
+    func verifiedModelDirectory(for policy: WhisperModelPolicy) async -> VerifiedLocalSTTModelDirectory
+}
+
 public struct LocalSTTModelInstallRequest: Equatable, Sendable {
     public let policy: WhisperModelPolicy
     public let consentGranted: Bool
@@ -104,6 +113,35 @@ public actor FakeLocalSTTModelManager: LocalSTTModelManaging {
         policies
     }
 }
+
+public actor FakeLocalSTTModelPathProvider: LocalSTTModelPathProviding {
+    private let result: VerifiedLocalSTTModelDirectory
+    private var policies: [WhisperModelPolicy] = []
+
+    public init(result: VerifiedLocalSTTModelDirectory) {
+        self.result = result
+    }
+
+    public func availability(for policy: WhisperModelPolicy) async -> LocalSTTModelAvailability {
+        policies.append(policy)
+        switch result {
+        case .ready:
+            return .ready
+        case .unavailable(let availability):
+            return availability
+        }
+    }
+
+    public func verifiedModelDirectory(for policy: WhisperModelPolicy) async -> VerifiedLocalSTTModelDirectory {
+        policies.append(policy)
+        return result
+    }
+
+    public func requestedPolicies() -> [WhisperModelPolicy] {
+        policies
+    }
+}
+
 
 public actor ModelManagedSpeechTranscriber: SpeechTranscribing {
     private let modelManager: any LocalSTTModelManaging

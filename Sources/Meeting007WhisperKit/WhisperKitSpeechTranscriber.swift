@@ -35,8 +35,37 @@ public enum WhisperKitSpeechChunkValidator {
     }
 }
 
+public enum WhisperKitTranscriptionPipelineFactory {
+    public static func makeProductionPipeline(
+        modelPathProvider: any LocalSTTModelPathProviding,
+        configuration: WhisperKitAdapterConfiguration = WhisperKitAdapterConfiguration()
+    ) -> LocalSTTPipeline {
+        LocalSTTPipeline(transcriber: makeProductionTranscriber(
+            modelPathProvider: modelPathProvider,
+            configuration: configuration
+        ))
+    }
+
+    public static func makeProductionTranscriber(
+        modelPathProvider: any LocalSTTModelPathProviding,
+        configuration: WhisperKitAdapterConfiguration = WhisperKitAdapterConfiguration()
+    ) -> any SpeechTranscribing {
+        WhisperKitSpeechTranscriber(
+            modelPathProvider: modelPathProvider,
+            configuration: configuration
+        )
+    }
+}
+
 public protocol WhisperKitTranscriptionEngine: Sendable {
+    func prepare() async throws
     func transcribe(_ chunk: SpeechChunk, language: String) async throws -> String
+    func stop() async
+}
+
+public extension WhisperKitTranscriptionEngine {
+    func prepare() async throws {}
+    func stop() async {}
 }
 
 public struct FakeWhisperKitTranscriptionEngine: WhisperKitTranscriptionEngine {
@@ -84,8 +113,11 @@ public struct LocalWhisperKitTranscriptionEngine: WhisperKitTranscriptionEngine 
 
 public actor WhisperKitSpeechTranscriber: SpeechTranscribing {
     private let modelManager: any LocalSTTModelManaging
+    private let modelPathProvider: (any LocalSTTModelPathProviding)?
     private let configuration: WhisperKitAdapterConfiguration
-    private let engine: any WhisperKitTranscriptionEngine
+    private let fixedEngine: (any WhisperKitTranscriptionEngine)?
+    private let engineFactory: (@Sendable (URL) -> any WhisperKitTranscriptionEngine)?
+    private var activeEngine: (any WhisperKitTranscriptionEngine)?
     private var activeConfig: STTSessionConfig?
     private var downloadAttempts = 0
 
@@ -95,8 +127,24 @@ public actor WhisperKitSpeechTranscriber: SpeechTranscribing {
         engine: any WhisperKitTranscriptionEngine
     ) {
         self.modelManager = modelManager
+        self.modelPathProvider = nil
         self.configuration = configuration
-        self.engine = engine
+        self.fixedEngine = engine
+        self.engineFactory = nil
+    }
+
+    public init(
+        modelPathProvider: any LocalSTTModelPathProviding,
+        configuration: WhisperKitAdapterConfiguration = WhisperKitAdapterConfiguration(),
+        engineFactory: @escaping @Sendable (URL) -> any WhisperKitTranscriptionEngine = { modelDirectory in
+            LocalWhisperKitTranscriptionEngine(modelFolder: modelDirectory.path)
+        }
+    ) {
+        self.modelManager = modelPathProvider
+        self.modelPathProvider = modelPathProvider
+        self.configuration = configuration
+        self.fixedEngine = nil
+        self.engineFactory = engineFactory
     }
 
     public func start(config: STTSessionConfig) async -> TranscriptionStartResult {
@@ -108,35 +156,59 @@ public actor WhisperKitSpeechTranscriber: SpeechTranscribing {
             ))
         }
 
+        if let modelPathProvider {
+            let directory = await modelPathProvider.verifiedModelDirectory(for: configuration.modelPolicy)
+            switch directory {
+            case .ready(let modelDirectory):
+                guard let engineFactory else {
+                    activeConfig = nil
+                    activeEngine = nil
+                    return .unavailable(TranscriptionFailure(
+                        code: "local_stt_engine_unavailable",
+                        message: "Local transcription could not start."
+                    ))
+                }
+                let engine = engineFactory(modelDirectory)
+                do {
+                    try await engine.prepare()
+                    activeEngine = engine
+                    activeConfig = config
+                    return .ready
+                } catch {
+                    activeEngine = nil
+                    activeConfig = nil
+                    return .unavailable(TranscriptionFailure(
+                        code: "local_stt_engine_unavailable",
+                        message: "Local transcription could not start."
+                    ))
+                }
+            case .unavailable(let availability):
+                activeEngine = nil
+                activeConfig = nil
+                return unavailableResult(for: availability)
+            }
+        }
+
         let availability = await modelManager.availability(for: configuration.modelPolicy)
         switch availability {
         case .ready:
+            do {
+                try await fixedEngine?.prepare()
+            } catch {
+                activeConfig = nil
+                activeEngine = nil
+                return .unavailable(TranscriptionFailure(
+                    code: "local_stt_engine_unavailable",
+                    message: "Local transcription could not start."
+                ))
+            }
+            activeEngine = fixedEngine
             activeConfig = config
             return .ready
-        case .missing:
+        case .missing, .invalid, .downloading, .downloadFailed:
+            activeEngine = nil
             activeConfig = nil
-            return .unavailable(TranscriptionFailure(
-                code: "local_stt_model_missing",
-                message: "The Russian transcription model is not installed on this Mac."
-            ))
-        case .invalid:
-            activeConfig = nil
-            return .unavailable(TranscriptionFailure(
-                code: "local_stt_model_invalid",
-                message: "The Russian transcription model could not be verified. Download it again."
-            ))
-        case .downloading:
-            activeConfig = nil
-            return .unavailable(TranscriptionFailure(
-                code: "local_stt_model_downloading",
-                message: "The Russian transcription model is still downloading."
-            ))
-        case .downloadFailed:
-            activeConfig = nil
-            return .unavailable(TranscriptionFailure(
-                code: "local_stt_model_download_failed",
-                message: "The Russian transcription model download did not finish. Try again."
-            ))
+            return unavailableResult(for: availability)
         }
     }
 
@@ -150,7 +222,10 @@ public actor WhisperKitSpeechTranscriber: SpeechTranscribing {
         }
 
         do {
-            let text = try await engine.transcribe(chunk, language: activeConfig.language)
+            guard let activeEngine else {
+                return []
+            }
+            let text = try await activeEngine.transcribe(chunk, language: activeConfig.language)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else {
                 return []
@@ -176,6 +251,8 @@ public actor WhisperKitSpeechTranscriber: SpeechTranscribing {
             return []
         }
 
+        await activeEngine?.stop()
+        activeEngine = nil
         activeConfig = nil
         return []
     }
@@ -190,6 +267,33 @@ public actor WhisperKitSpeechTranscriber: SpeechTranscribing {
             return .me
         case .system:
             return .others
+        }
+    }
+
+    private func unavailableResult(for availability: LocalSTTModelAvailability) -> TranscriptionStartResult {
+        switch availability {
+        case .ready:
+            return .ready
+        case .missing:
+            return .unavailable(TranscriptionFailure(
+                code: "local_stt_model_missing",
+                message: "The Russian transcription model is not installed on this Mac."
+            ))
+        case .invalid:
+            return .unavailable(TranscriptionFailure(
+                code: "local_stt_model_invalid",
+                message: "The Russian transcription model could not be verified. Download it again."
+            ))
+        case .downloading:
+            return .unavailable(TranscriptionFailure(
+                code: "local_stt_model_downloading",
+                message: "The Russian transcription model is still downloading."
+            ))
+        case .downloadFailed:
+            return .unavailable(TranscriptionFailure(
+                code: "local_stt_model_download_failed",
+                message: "The Russian transcription model download did not finish. Try again."
+            ))
         }
     }
 }
