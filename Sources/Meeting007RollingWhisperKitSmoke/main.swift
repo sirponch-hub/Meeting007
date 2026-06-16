@@ -66,7 +66,7 @@ struct Meeting007RollingWhisperKitSmoke {
         let sampleRate = RuntimeAudioFrameNormalizer.defaultTargetSampleRate
         let stepSampleCount = Int(sampleRate)
         var offset = 0
-        var lastCommitted = ""
+        var lastPrintedUpdate = StreamingTranscriptUpdate(committedText: "", partialText: "")
         var tickIndex = 0
 
         while offset < samples.count {
@@ -86,12 +86,12 @@ struct Meeting007RollingWhisperKitSmoke {
             ))
 
             let update = try await session.tick()
-            if update.committedText != lastCommitted || !update.partialText.isEmpty {
+            if update != lastPrintedUpdate {
                 print(String(format: "[rolling %05.1fs] committed: %@", startedAt + duration, update.committedText))
                 if !update.partialText.isEmpty {
                     print(String(format: "[rolling %05.1fs] partial: %@", startedAt + duration, update.partialText))
                 }
-                lastCommitted = update.committedText
+                lastPrintedUpdate = update
             }
 
             tickIndex += 1

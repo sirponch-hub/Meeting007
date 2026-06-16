@@ -186,6 +186,89 @@ public struct LocalAgreementTranscriptStabilizer: Sendable {
     }
 }
 
+public struct RollingWindowHypothesisSeamFilter: Sendable {
+    private var previousFilteredHypothesis = ""
+
+    public init() {}
+
+    public mutating func filter(_ hypothesis: String, committedPrompt: String) -> String {
+        let normalizedHypothesis = normalize(hypothesis)
+        let normalizedPrompt = normalize(committedPrompt)
+        let promptFilteredHypothesis = removePromptEcho(
+            from: normalizedHypothesis,
+            committedPrompt: normalizedPrompt
+        )
+        let filteredHypothesis = mergeWithPreviousOverlap(promptFilteredHypothesis)
+
+        previousFilteredHypothesis = filteredHypothesis
+        return filteredHypothesis
+    }
+
+    public mutating func reset() {
+        previousFilteredHypothesis = ""
+    }
+
+    private func removePromptEcho(from hypothesis: String, committedPrompt: String) -> String {
+        guard !committedPrompt.isEmpty,
+              hypothesis.hasPrefix(committedPrompt) else {
+            return hypothesis
+        }
+
+        let remainder = String(hypothesis.dropFirst(committedPrompt.count))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard remainder.hasPrefix(committedPrompt) else {
+            return hypothesis
+        }
+
+        let deduplicatedRemainder = String(remainder.dropFirst(committedPrompt.count))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return [committedPrompt, deduplicatedRemainder]
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    private func mergeWithPreviousOverlap(_ hypothesis: String) -> String {
+        guard !previousFilteredHypothesis.isEmpty,
+              !hypothesis.isEmpty else {
+            return hypothesis
+        }
+
+        if hypothesis.hasPrefix(previousFilteredHypothesis) {
+            return hypothesis
+        }
+
+        if previousFilteredHypothesis.hasPrefix(hypothesis) {
+            return previousFilteredHypothesis
+        }
+
+        let previousWords = previousFilteredHypothesis.split(separator: " ")
+        let currentWords = hypothesis.split(separator: " ")
+        let maximumOverlap = min(previousWords.count, currentWords.count)
+        guard maximumOverlap > 0 else {
+            return hypothesis
+        }
+
+        for overlap in stride(from: maximumOverlap, through: 1, by: -1) {
+            let previousSuffix = previousWords.suffix(overlap)
+            let currentPrefix = currentWords.prefix(overlap)
+            if Array(previousSuffix) == Array(currentPrefix) {
+                let currentRemainder = currentWords.dropFirst(overlap)
+                return ([previousFilteredHypothesis] + currentRemainder.map(String.init))
+                    .filter { !$0.isEmpty }
+                    .joined(separator: " ")
+            }
+        }
+
+        return hypothesis
+    }
+
+    private func normalize(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 public actor RollingStreamingTranscriptionSession {
     private let sessionID: UUID
     private let lane: CaptureLane
@@ -193,6 +276,7 @@ public actor RollingStreamingTranscriptionSession {
     private let decoder: any RollingWindowTranscribing
     private var buffer: RollingAudioBuffer
     private var stabilizer = LocalAgreementTranscriptStabilizer()
+    private var seamFilter = RollingWindowHypothesisSeamFilter()
     private var lastUpdate = StreamingTranscriptUpdate(committedText: "", partialText: "")
 
     public init(
@@ -221,8 +305,10 @@ public actor RollingStreamingTranscriptionSession {
             return lastUpdate
         }
 
-        let hypothesis = try await decoder.transcribe(window: window, prompt: stabilizer.committedPrompt())
-        lastUpdate = stabilizer.observe(hypothesis.text)
+        let committedPrompt = stabilizer.committedPrompt()
+        let hypothesis = try await decoder.transcribe(window: window, prompt: committedPrompt)
+        let filteredHypothesis = seamFilter.filter(hypothesis.text, committedPrompt: committedPrompt)
+        lastUpdate = stabilizer.observe(filteredHypothesis)
         return lastUpdate
     }
 
@@ -233,6 +319,7 @@ public actor RollingStreamingTranscriptionSession {
     public func stop() {
         buffer.clear()
         stabilizer = LocalAgreementTranscriptStabilizer()
+        seamFilter.reset()
         lastUpdate = StreamingTranscriptUpdate(committedText: "", partialText: "")
     }
 }
