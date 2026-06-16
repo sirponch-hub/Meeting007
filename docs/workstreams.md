@@ -49,6 +49,21 @@ Remind the user to consider extra skills or MCP/connectors when these moments ar
 
 ## Current Workstreams
 
+## Wire Rolling Pipeline Into Recording Flow
+
+- Status: Ready for Review
+- Owner: Codex + BA/UX subagent
+- User outcome: During normal manual recording, the transcript area uses the local rolling WhisperKit path so fast Russian speech starts appearing as live partial text instead of waiting for VAD-final speech chunks.
+- Scope: Feed active mic PCM chunks from runtime capture into `RollingLocalTranscriptionPipeline`, prepare the real rolling WhisperKit adapter through the verified local model provider, replay early in-memory chunks captured while the model is preparing, poll rolling partials every 0.5 seconds, replace one partial segment instead of appending duplicates, resolve the best visible rolling draft on Stop, and keep fake STT out of production recording.
+- Out of scope: Smoke-only QA tail reconciliation in the app, final full re-transcription after Stop, system-audio transcription, diarization, Markdown/API/SQLite/MCP changes, raw audio persistence, cloud STT, accounts, hosted backend, and UI redesign.
+- Docs touched: `docs/architecture.md`, `docs/testing.md`, `docs/workstreams.md`.
+- Verification: `swift run Meeting007CoreChecks` passed; `swift run Meeting007WhisperKitChecks` passed; `swift build --product Meeting007App` passed with sandbox escalation for Swift/clang cache access; manual Apple Silicon Russian meeting QA pending.
+- Gates: BA/UX subagent confirmed the user outcome, no fake transcript fallback, replace-not-append partial behavior, bounded Stop behavior, and no production use of smoke-only tail reconciliation; architecture/QA subagent was unavailable due usage limit, so this branch records that process gap and keeps the implementation conservative; user acceptance pending; merge pending.
+- Subagents: BA/UX `019ecfb3-ee78-7e80-b35e-abaa2dbaca55` complete; architecture/QA `019ecfb4-48a9-72a2-b91e-236c369d3fe0` unavailable due usage limit; prior smoke-tail QA `019ecf55-dd36-76d2-b97d-4a095aec8497` explicitly limited QA tail reconciliation to smoke/manual proof only.
+- TDD/BDD evidence: Added checks that runtime audio forwards active mic PCM to the rolling live path, the rolling pipeline produces replaceable live partials and a final visible segment on Stop, and replaying early captured audio does not feed duplicate rolling windows.
+- Open decisions: Whether to start local STT before opening the microphone to reduce model-warmup delay further, whether Stop should drain a bounded queue of delayed rolling windows before finalizing, and what live Russian quality threshold is acceptable for merge to `main`.
+- Handoff notes: The app now uses rolling live STT for the main recording path when the verified model is ready. It still finalizes only the best visible rolling draft on Stop, so a separate stop-finalization/backlog-drain slice is needed before claiming robust final transcript completion for delayed meetings.
+
 ## Streaming Partials Rolling Buffer Spike
 
 - Status: Ready for Review

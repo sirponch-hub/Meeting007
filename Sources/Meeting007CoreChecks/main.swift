@@ -34,6 +34,7 @@ struct Meeting007CoreChecks {
         checkMicrophoneDeviceSelectionCanReturnToSystemInput()
         checkRuntimeAudioNormalizerDownmixesAndResamplesToMono16k()
         await checkRuntimeAudioConsumerAcceptsOnlyActiveSampleBearingChunks()
+        await checkRuntimeAudioConsumerForwardsChunksToRollingLivePipeline()
         await checkRuntimeAudioConsumerDoesNotBlockCaptureOnSlowTranscription()
         await checkRuntimeAudioConsumerDeliversSpeechChunksInOrder()
         await checkRuntimeAudioConsumerFlushesSpeechBeforeEndReturns()
@@ -48,6 +49,8 @@ struct Meeting007CoreChecks {
         checkRollingAudioBufferKeepsBoundedRecentWindow()
         await checkRollingStreamingSessionProducesPartialBeforeVADFinalChunk()
         await checkRollingStreamingSessionRejectsWrongSessionAndClearsOnStop()
+        await checkRollingLocalTranscriptionPipelineProducesLivePartialAndFinalSegment()
+        await checkRollingLocalTranscriptionPipelineIgnoresReplayedAudioChunks()
         checkLocalAgreementStabilizerCommitsOnlyStablePrefix()
         checkRollingSeamFilterRemovesPromptEchoBeforeStabilizer()
         checkRollingSeamFilterCollapsesOverlappingWindowText()
@@ -742,6 +745,20 @@ struct Meeting007CoreChecks {
         require(stoppedChunks.isEmpty, "Runtime consumer must clear PCM samples on Stop and reject late chunks.")
     }
 
+    private static func checkRuntimeAudioConsumerForwardsChunksToRollingLivePipeline() async {
+        let sessionID = UUID()
+        let liveConsumer = RecordingAudioChunkConsumer()
+        let consumer = RuntimeOnlyAudioChunkConsumer(liveAudioConsumer: liveConsumer)
+
+        await consumer.begin(sessionID: sessionID)
+        await consumer.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0, amplitude: 0.2))
+        await consumer.receive(makeCapturedAudioChunk(sessionID: UUID(), startedAt: 1, amplitude: 0.2))
+
+        let liveChunks = await liveConsumer.chunks()
+        require(liveChunks.count == 1, "Runtime consumer must forward active PCM chunks to the rolling live pipeline.")
+        require(liveChunks.first?.sessionID == sessionID, "Rolling live pipeline must receive only active-session chunks.")
+    }
+
     private static func checkRuntimeAudioConsumerDoesNotBlockCaptureOnSlowTranscription() async {
         let sessionID = UUID()
         let slowSTT = BlockingSpeechChunkConsumer()
@@ -1000,6 +1017,57 @@ struct Meeting007CoreChecks {
         await streamingSession.stop()
         let stoppedDuration = await streamingSession.bufferedDuration()
         require(stoppedDuration == 0, "Rolling streaming spike must clear runtime PCM on Stop.")
+    }
+
+    private static func checkRollingLocalTranscriptionPipelineProducesLivePartialAndFinalSegment() async {
+        let sessionID = UUID()
+        let decoder = ScriptedRollingWindowDecoder(outputs: [
+            "быстрая русская речь идет",
+            "быстрая русская речь идет дальше"
+        ])
+        let pipeline = RollingLocalTranscriptionPipeline(
+            decoder: decoder,
+            bufferDuration: 30,
+            windowDuration: 20
+        )
+
+        let start = await pipeline.start(STTSessionConfig(sessionID: sessionID))
+        require(start == .ready, "Rolling live pipeline must start for an active recording session.")
+
+        await pipeline.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0, amplitude: 0.2))
+        let firstVisible = await pipeline.tick()
+        await pipeline.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 1, amplitude: 0.2))
+        let secondVisible = await pipeline.tick()
+        let finalVisible = await pipeline.stop(sessionID: sessionID)
+
+        require(firstVisible.count == 1, "First rolling live update should show a single replaceable partial segment.")
+        require(firstVisible.first?.state == .partial, "First rolling live segment must be partial.")
+        require(secondVisible.filter { $0.state == .partial }.count <= 1, "Rolling live updates must replace the partial segment instead of appending duplicates.")
+        require(finalVisible.count == 1, "Stop must resolve rolling live text into one clean final segment for this slice.")
+        require(finalVisible.first?.state == .final, "Stop-resolved rolling segment must be final.")
+        require(finalVisible.first?.text.contains("быстрая русская речь") == true, "Rolling live final segment must preserve recognized Russian text.")
+    }
+
+    private static func checkRollingLocalTranscriptionPipelineIgnoresReplayedAudioChunks() async {
+        let sessionID = UUID()
+        let decoder = ScriptedRollingWindowDecoder(outputs: ["первая ранняя фраза"])
+        let pipeline = RollingLocalTranscriptionPipeline(
+            decoder: decoder,
+            bufferDuration: 30,
+            windowDuration: 20
+        )
+        let earlyChunk = makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0, amplitude: 0.2)
+
+        let start = await pipeline.start(STTSessionConfig(sessionID: sessionID))
+        require(start == .ready, "Rolling live pipeline must start before early audio replay is accepted.")
+
+        await pipeline.receive(earlyChunk)
+        await pipeline.receive(earlyChunk)
+        _ = await pipeline.tick()
+
+        let windows = await decoder.receivedWindows()
+        require(windows.count == 1, "Rolling live pipeline must ignore already accepted audio chunks when early captured audio is replayed.")
+        require(windows.first?.duration == earlyChunk.duration, "Rolling live pipeline must keep only the original early audio duration.")
     }
 
     private static func checkLocalAgreementStabilizerCommitsOnlyStablePrefix() {
@@ -2483,6 +2551,18 @@ private actor RecordingSpeechChunkConsumer: SpeechChunkConsumer {
     }
 
     func chunks() -> [SpeechChunk] {
+        deliveredChunks
+    }
+}
+
+private actor RecordingAudioChunkConsumer: AudioChunkConsumer {
+    private var deliveredChunks: [CapturedAudioChunk] = []
+
+    func receive(_ chunk: CapturedAudioChunk) async {
+        deliveredChunks.append(chunk)
+    }
+
+    func chunks() -> [CapturedAudioChunk] {
         deliveredChunks
     }
 }

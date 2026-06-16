@@ -23,7 +23,7 @@ public extension WhisperKitRollingWindowEngine {
     func stop() async {}
 }
 
-public actor WhisperKitRollingWindowTranscriber: RollingWindowTranscribing, TranscriptionFailureReporting {
+public actor WhisperKitRollingWindowTranscriber: RollingWindowTranscribing, RollingTranscriptionLifecycle, TranscriptionFailureReporting {
     private let modelPathProvider: (any LocalSTTModelPathProviding)?
     private let configuration: WhisperKitRollingWindowConfiguration
     private let fixedEngine: (any WhisperKitRollingWindowEngine)?

@@ -45,7 +45,7 @@ Current implemented microphone boundary:
 - `MicrophoneRecordingCaptureDriver` composes a microphone driver with a runtime-only audio chunk consumer.
 - `CapturedAudioChunk` carries meeting ID, lane, sample-clock timing, byte count, normalized sample format, and in-memory Float PCM samples.
 - `RuntimeAudioFrameNormalizer` downmixes microphone input to mono and resamples it to 16 kHz for the VAD/STT path.
-- `RuntimeOnlyAudioChunkConsumer` accepts sample-bearing chunks only while the session is active, feeds VAD, and clears PCM buffers on Stop.
+- `RuntimeOnlyAudioChunkConsumer` accepts sample-bearing chunks only while the session is active, forwards active mic PCM to the rolling live transcription path, feeds VAD for legacy speech-chunk consumers, and clears PCM buffers on Stop.
 - `VADSpeechChunker` turns speech-positive PCM frames into bounded `SpeechChunk` utterances and flushes active speech on Stop so the last spoken words are not dropped.
 - `AVAudioEngineMicrophoneCaptureDriver` lives in the macOS app edge, requests microphone access on Start, starts `AVAudioEngine`, emits in-memory sample-bearing mic chunks, derives timestamps from emitted sample count, and updates the UI with a compact mic lane status.
 - The first mic slice does not persist raw audio and does not add system audio capture.
@@ -64,7 +64,7 @@ The chunker uses VAD to cut speech at natural boundaries. Partial segments may u
 Current implemented STT boundary:
 
 - `STTSessionConfig` defaults transcription to Russian (`ru`) and the microphone lane.
-- `LocalSTTPipeline` owns active-session lifecycle, accepts `SpeechChunk` utterances, upserts partial/final `TranscriptSegment` updates, ignores chunks after Stop, and exposes visible segments for UI/copy/export.
+- `LocalSTTPipeline` owns the legacy speech-window lifecycle, accepts `SpeechChunk` utterances, upserts partial/final `TranscriptSegment` updates, ignores chunks after Stop, and exposes visible segments for UI/copy/export.
 - `SpeechTranscribing` is the runtime protocol that real WhisperKit or another local STT adapter will implement.
 - `FakeRussianSpeechTranscriber` provides deterministic Russian partial/final segments for CI-safe checks and UI wiring without cloud or model files.
 - `WhisperModelPolicy.defaultRussian` pins `large-v3-v20240930_626MB` as the production Russian model candidate and keeps `tiny` debug-only.
@@ -74,7 +74,9 @@ Current implemented STT boundary:
 - `Meeting007WhisperKit` is an isolated adapter target that depends on the upstream `argmax-oss-swift` Swift package product `WhisperKit` while keeping `Meeting007Core` dependency-light and fast to test.
 - `WhisperKitSpeechTranscriber` compiles behind the same `SpeechTranscribing` protocol and accepts `SpeechChunk` input only; it does not know about `AVAudioEngine`, VAD internals, Markdown, SQLite, REST, or MCP.
 - The WhisperKit adapter defaults to Russian, requires model readiness before transcribing, and deliberately does not initiate automatic model download.
-- The app production composition now uses `WhisperKitTranscriptionPipelineFactory` with `LocalSTTModelStore` as the verified model path provider. `FakeRussianSpeechTranscriber` remains for explicit checks/dev injection only, not the default recording path.
+- The app production composition now uses `WhisperKitTranscriptionPipelineFactory.makeProductionRollingPipeline` with `LocalSTTModelStore` as the verified model path provider. Active recording feeds normalized mic PCM into `RollingLocalTranscriptionPipeline`, polls it for live rolling partials, and replaces the same partial segment instead of appending duplicates.
+- When a recording starts, microphone capture may begin before the local model finishes preparing. After the rolling pipeline reports ready, the app replays already captured in-memory runtime chunks into the rolling buffer so the first seconds of speech are less likely to be lost. The rolling pipeline rejects already accepted chunks by sample-clock end time to keep replay from creating duplicate live text.
+- `RollingLocalTranscriptionPipeline` owns the active rolling session lifecycle, prepares the WhisperKit rolling adapter when available, keeps one committed segment plus one replaceable partial segment for the UI, and finalizes only the best visible rolling draft on Stop. It does not use the smoke-only QA tail reconciler.
 - Runtime WhisperKit load/decode errors are exposed through the STT pipeline failure state so the app can switch from `Transcribing locally` to a recoverable unavailable status instead of silently showing an empty transcript.
 - `LocalSTTModelInstaller` owns explicit-consent install lifecycle separately from transcription: pending consent, progress, verification, ready, cancellation, and failure.
 - `LocalSTTModelStore` checks the app-owned model folder under Application Support and exposes readiness through `LocalSTTModelManaging`; model files are never stored in the Markdown transcript folder.
@@ -82,7 +84,7 @@ Current implemented STT boundary:
 - `install.json` is written only after successful verification and records policy ID, language, repository, revision, folder, actual bytes, file count, per-file sizes, per-file SHA-256, `source: explicit-user-consent`, and `status: installed`.
 - The verified model folder must include WhisperKit tokenizer runtime files (`tokenizer.json` and `tokenizer_config.json`) in addition to the CoreML model bundles. CoreML-only installs are not ready because WhisperKit cannot decode text without the tokenizer.
 - Existing installs are considered ready only when `install.json` matches the current Russian policy and all recorded files still exist with matching sizes and SHA-256 values. A folder without a valid marker, tokenizer files, or with corrupted files is not ready and does not trigger automatic repair.
-- The app Settings surface shows Russian model status and starts install only after a confirmation sheet. Real WhisperKit transcription is wired into the app recording flow when the verified model directory is available; partial-rich live streaming and latency tuning remain future slices.
+- The app Settings surface shows Russian model status and starts install only after a confirmation sheet. Real WhisperKit rolling transcription is wired into the app recording flow when the verified model directory is available; final-pass cleanup, stop-time backlog draining beyond the current visible draft, system-audio transcription, and latency tuning remain future slices.
 
 ## Storage
 

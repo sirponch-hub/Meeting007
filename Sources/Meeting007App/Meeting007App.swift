@@ -52,7 +52,8 @@ final class RecordingShellViewModel: ObservableObject {
     private let modelInstaller: LocalSTTModelInstaller
     private let controller: RecordingSessionController
     private let transcriptPreviewController: LiveTranscriptPreviewController
-    private let sttPipeline: LocalSTTPipeline
+    private let rollingTranscriptionPipeline: RollingLocalTranscriptionPipeline
+    private let runtimeAudioConsumer: RuntimeOnlyAudioChunkConsumer
     private let recordingStore: any RecordingSessionStore
     private let clipboardWriter: any ClipboardWriting
     private let transcriptFolderSettings: MarkdownTranscriptFolderSettings
@@ -69,7 +70,7 @@ final class RecordingShellViewModel: ObservableObject {
         modelManager: (any LocalSTTModelManaging)? = nil,
         modelInstaller: LocalSTTModelInstaller? = nil,
         transcriptPreviewController: LiveTranscriptPreviewController = LiveTranscriptPreviewController(),
-        sttPipeline: LocalSTTPipeline? = nil,
+        rollingTranscriptionPipeline: RollingLocalTranscriptionPipeline? = nil,
         recordingStore: any RecordingSessionStore = InMemoryRecordingSessionStore(),
         clipboardWriter: any ClipboardWriting = PasteboardClipboardWriter(),
         transcriptFolderSettings: MarkdownTranscriptFolderSettings = MarkdownTranscriptFolderSettings(),
@@ -84,20 +85,22 @@ final class RecordingShellViewModel: ObservableObject {
             downloader: HuggingFaceModelDownloader(),
             store: defaultModelStore
         )
-        let effectiveSTTPipeline = sttPipeline ?? WhisperKitTranscriptionPipelineFactory.makeProductionPipeline(
+        let effectiveRollingPipeline = rollingTranscriptionPipeline ?? WhisperKitTranscriptionPipelineFactory.makeProductionRollingPipeline(
             modelPathProvider: defaultModelStore
         )
+        let effectiveRuntimeAudioConsumer = RuntimeOnlyAudioChunkConsumer(liveAudioConsumer: effectiveRollingPipeline)
         self.controller = controller ?? RecordingSessionController(
             captureDriver: MicrophoneRecordingCaptureDriver(
                 microphone: AVAudioEngineMicrophoneCaptureDriver(
                     statusModel: microphoneStatusModel,
                     deviceSettings: microphoneDeviceSettings
                 ),
-                consumer: RuntimeOnlyAudioChunkConsumer(speechChunkConsumer: effectiveSTTPipeline)
+                consumer: effectiveRuntimeAudioConsumer
             )
         )
         self.transcriptPreviewController = transcriptPreviewController
-        self.sttPipeline = effectiveSTTPipeline
+        self.rollingTranscriptionPipeline = effectiveRollingPipeline
+        self.runtimeAudioConsumer = effectiveRuntimeAudioConsumer
         self.recordingStore = recordingStore
         self.clipboardWriter = clipboardWriter
         self.transcriptFolderSettings = transcriptFolderSettings
@@ -218,8 +221,8 @@ final class RecordingShellViewModel: ObservableObject {
             let nextState = await controller.stopManualRecording()
             let frozenSegments: [TranscriptSegment]
             if let currentSessionID {
-                previewSegments = await sttPipeline.visibleSegments()
-                frozenSegments = await sttPipeline.stop(sessionID: currentSessionID)
+                previewSegments = await rollingTranscriptionPipeline.visibleSegments()
+                frozenSegments = await rollingTranscriptionPipeline.stop(sessionID: currentSessionID)
             } else {
                 frozenSegments = previewSegments
             }
@@ -505,7 +508,7 @@ final class RecordingShellViewModel: ObservableObject {
         previewSegments = []
         transcriptionStatusText = "Preparing local Russian transcription..."
 
-        let startResult = await sttPipeline.start(STTSessionConfig(sessionID: session.id))
+        let startResult = await rollingTranscriptionPipeline.start(STTSessionConfig(sessionID: session.id))
         guard startResult == .ready else {
             transcriptionStatusText = "Recording audio locally; transcription unavailable"
             if case let .unavailable(failure) = startResult {
@@ -515,7 +518,10 @@ final class RecordingShellViewModel: ObservableObject {
         }
 
         transcriptionStatusText = "Transcribing locally"
-        previewSegments = await sttPipeline.visibleSegments()
+        for chunk in await runtimeAudioConsumer.capturedChunks() {
+            await rollingTranscriptionPipeline.receive(chunk)
+        }
+        previewSegments = await rollingTranscriptionPipeline.visibleSegments()
 
         stopTranscriptPreviewTimer()
         transcriptPreviewTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
@@ -525,8 +531,8 @@ final class RecordingShellViewModel: ObservableObject {
                     return
                 }
 
-                self.previewSegments = await self.sttPipeline.visibleSegments()
-                if let failure = await self.sttPipeline.lastFailure() {
+                self.previewSegments = await self.rollingTranscriptionPipeline.tick()
+                if let failure = await self.rollingTranscriptionPipeline.lastFailure() {
                     self.transcriptionStatusText = "Recording audio locally; transcription unavailable"
                     self.errorMessage = failure.message
                 }

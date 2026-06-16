@@ -124,6 +124,12 @@ public protocol RollingWindowTranscribing: Sendable {
     func transcribe(window: RollingAudioWindow, prompt: String) async throws -> RollingTranscriptionHypothesis
 }
 
+public protocol RollingTranscriptionLifecycle: Sendable {
+    func prepare() async -> TranscriptionStartResult
+    func stop() async
+    func lastFailure() async -> TranscriptionFailure?
+}
+
 public struct StreamingTranscriptUpdate: Equatable, Sendable {
     public let committedText: String
     public let partialText: String
@@ -546,6 +552,175 @@ public actor RollingStreamingTranscriptionSession {
         let visibleText = update.visibleText
         if visibleText.count > bestVisibleDraft.count {
             bestVisibleDraft = visibleText
+        }
+    }
+}
+
+public actor RollingLocalTranscriptionPipeline: AudioChunkConsumer {
+    private let decoder: any RollingWindowTranscribing
+    private let lifecycle: (any RollingTranscriptionLifecycle)?
+    private let bufferDuration: TimeInterval
+    private let windowDuration: TimeInterval
+    private var activeConfig: STTSessionConfig?
+    private var session: RollingStreamingTranscriptionSession?
+    private var committedSegmentID = UUID()
+    private var partialSegmentID = UUID()
+    private var committedSegment: TranscriptSegment?
+    private var partialSegment: TranscriptSegment?
+    private var latestAudioEndTime: TimeInterval = 0
+    private var runtimeFailure: TranscriptionFailure?
+
+    public init(
+        decoder: any RollingWindowTranscribing,
+        lifecycle: (any RollingTranscriptionLifecycle)? = nil,
+        bufferDuration: TimeInterval = 30,
+        windowDuration: TimeInterval = 20
+    ) {
+        self.decoder = decoder
+        self.lifecycle = lifecycle
+        self.bufferDuration = bufferDuration
+        self.windowDuration = windowDuration
+    }
+
+    public func start(_ config: STTSessionConfig) async -> TranscriptionStartResult {
+        if let lifecycle {
+            let startResult = await lifecycle.prepare()
+            guard startResult == .ready else {
+                activeConfig = nil
+                session = nil
+                if case let .unavailable(failure) = startResult {
+                    runtimeFailure = failure
+                }
+                return startResult
+            }
+        }
+
+        activeConfig = config
+        session = RollingStreamingTranscriptionSession(
+            sessionID: config.sessionID,
+            lane: config.lane,
+            bufferDuration: bufferDuration,
+            windowDuration: windowDuration,
+            decoder: decoder
+        )
+        committedSegmentID = UUID()
+        partialSegmentID = UUID()
+        committedSegment = nil
+        partialSegment = nil
+        latestAudioEndTime = 0
+        runtimeFailure = nil
+        return .ready
+    }
+
+    public func receive(_ chunk: CapturedAudioChunk) async {
+        guard let activeConfig,
+              activeConfig.sessionID == chunk.sessionID,
+              activeConfig.lane == chunk.lane else {
+            return
+        }
+
+        let chunkEndTime = chunk.startedAt + chunk.duration
+        guard chunkEndTime > latestAudioEndTime + 0.001 else {
+            return
+        }
+
+        latestAudioEndTime = max(latestAudioEndTime, chunkEndTime)
+        await session?.receive(chunk)
+    }
+
+    @discardableResult
+    public func tick() async -> [TranscriptSegment] {
+        guard let activeConfig, let session else {
+            return visibleSegments()
+        }
+
+        do {
+            let update = try await session.tick()
+            apply(update, config: activeConfig, stateForCommitted: .final)
+        } catch {
+            runtimeFailure = TranscriptionFailure(
+                code: "local_stt_runtime_failed",
+                message: "Local rolling transcription stopped unexpectedly."
+            )
+        }
+
+        return visibleSegments()
+    }
+
+    @discardableResult
+    public func stop(sessionID: UUID) async -> [TranscriptSegment] {
+        guard activeConfig?.sessionID == sessionID else {
+            return visibleSegments()
+        }
+
+        if let config = activeConfig,
+           let finalUpdate = await session?.finalizeBestEffortDraft() {
+            apply(finalUpdate, config: config, stateForCommitted: .final)
+            partialSegment = nil
+        }
+
+        await session?.stop()
+        await lifecycle?.stop()
+        activeConfig = nil
+        session = nil
+        return visibleSegments()
+    }
+
+    public func visibleSegments() -> [TranscriptSegment] {
+        [committedSegment, partialSegment].compactMap { segment in
+            guard let segment, !segment.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return nil
+            }
+            return segment
+        }
+    }
+
+    public func lastFailure() async -> TranscriptionFailure? {
+        if let lifecycleFailure = await lifecycle?.lastFailure() {
+            return lifecycleFailure
+        }
+        return runtimeFailure
+    }
+
+    private func apply(
+        _ update: StreamingTranscriptUpdate,
+        config: STTSessionConfig,
+        stateForCommitted: TranscriptSegmentState
+    ) {
+        let endTime = max(latestAudioEndTime, 0.1)
+        if !update.committedText.isEmpty {
+            committedSegment = TranscriptSegment(
+                id: committedSegmentID,
+                meetingID: config.sessionID,
+                lane: speakerLane(for: config.lane),
+                state: stateForCommitted,
+                startTime: 0,
+                endTime: endTime,
+                text: update.committedText
+            )
+        }
+
+        if update.partialText.isEmpty {
+            partialSegment = nil
+        } else {
+            partialSegment = TranscriptSegment(
+                id: partialSegmentID,
+                meetingID: config.sessionID,
+                lane: speakerLane(for: config.lane),
+                state: .partial,
+                startTime: endTime,
+                endTime: endTime,
+                text: update.partialText
+            )
+        }
+    }
+
+    private func speakerLane(for lane: CaptureLane) -> SpeakerLane {
+        switch lane {
+        case .mic:
+            return .me
+        case .system:
+            return .others
         }
     }
 }

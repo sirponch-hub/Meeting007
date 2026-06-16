@@ -237,6 +237,7 @@ public enum RuntimeAudioFrameNormalizer {
 
 public actor RuntimeOnlyAudioChunkConsumer: AudioChunkConsumer {
     private let speechChunkConsumer: (any SpeechChunkConsumer)?
+    private let liveAudioConsumer: (any AudioChunkConsumer)?
     private var vad: VADSpeechChunker
     private var activeSessionID: UUID?
     private var pendingSpeechChunks: [SpeechChunk] = []
@@ -246,9 +247,11 @@ public actor RuntimeOnlyAudioChunkConsumer: AudioChunkConsumer {
 
     public init(
         speechChunkConsumer: (any SpeechChunkConsumer)? = nil,
+        liveAudioConsumer: (any AudioChunkConsumer)? = nil,
         vadConfiguration: VADSpeechChunker.Configuration = .default
     ) {
         self.speechChunkConsumer = speechChunkConsumer
+        self.liveAudioConsumer = liveAudioConsumer
         self.vad = VADSpeechChunker(configuration: vadConfiguration)
     }
 
@@ -286,6 +289,7 @@ public actor RuntimeOnlyAudioChunkConsumer: AudioChunkConsumer {
         }
 
         chunks.append(chunk)
+        await liveAudioConsumer?.receive(chunk)
         let speechChunks = vad.receive(chunk)
         enqueueDelivery(for: speechChunks)
     }

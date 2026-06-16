@@ -55,6 +55,17 @@ public enum WhisperKitTranscriptionPipelineFactory {
             configuration: configuration
         )
     }
+
+    public static func makeProductionRollingPipeline(
+        modelPathProvider: any LocalSTTModelPathProviding,
+        configuration: WhisperKitRollingWindowConfiguration = WhisperKitRollingWindowConfiguration()
+    ) -> RollingLocalTranscriptionPipeline {
+        let transcriber = WhisperKitRollingWindowTranscriber(
+            modelPathProvider: modelPathProvider,
+            configuration: configuration
+        )
+        return RollingLocalTranscriptionPipeline(decoder: transcriber, lifecycle: transcriber)
+    }
 }
 
 public protocol WhisperKitTranscriptionEngine: Sendable {
