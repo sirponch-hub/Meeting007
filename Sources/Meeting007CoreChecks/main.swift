@@ -58,6 +58,7 @@ struct Meeting007CoreChecks {
         await checkRollingStreamingSessionReplacesRepeatedPartialInsteadOfAppending()
         await checkRollingStreamingSessionKeepsCommittedBeginningAcrossShiftedWindows()
         await checkRollingStreamingSessionFinalizesBestVisibleDraft()
+        checkTranscriptQualityEvaluationNormalizesRussianText()
         await checkRuntimeAudioChunksDoNotPersistIntoMarkdown()
         await checkLocalSTTDefaultsToRussian()
         checkWhisperModelPolicyDefaultsToRussianPinnedModel()
@@ -1148,6 +1149,22 @@ struct Meeting007CoreChecks {
         require(final.partialText.isEmpty, "Best-effort finalization must return a single final draft string.")
         require(final.committedText.contains("на слайде артефакты и свидетельства"), "Best-effort finalization must not drop the longer visible live draft.")
         require(final.committedText.hasPrefix("исправил причина ошибки powerpoint"), "Best-effort finalization must keep the accepted beginning.")
+    }
+
+    private static func checkTranscriptQualityEvaluationNormalizesRussianText() {
+        let expected = "Ёлка, PowerPoint: фигуры с отрицательной высотой."
+        let recognized = "елка powerpoint фигуры отрицательной высотой"
+
+        let evaluation = TranscriptQualityEvaluation.evaluate(expected: expected, recognized: recognized)
+
+        require(evaluation.expectedWordCount == 6, "Quality evaluation must tokenize expected Russian text.")
+        require(evaluation.recognizedWordCount == 5, "Quality evaluation must tokenize recognized Russian text.")
+        require(evaluation.matchedExpectedWordCount == 5, "Quality evaluation must ignore punctuation, case, and ё/е differences.")
+        require(evaluation.recall > 0.8, "Quality evaluation recall must reflect matched expected words.")
+        require(evaluation.precision == 1, "Quality evaluation precision must reflect extra/missing recognized words.")
+        require(evaluation.wordErrorRate > 0 && evaluation.wordErrorRate < 0.4, "Quality evaluation must expose normalized word error rate.")
+        require(evaluation.characterErrorRate > 0 && evaluation.characterErrorRate < 0.3, "Quality evaluation must expose normalized character error rate.")
+        require(evaluation.missingExpectedWords == ["с"], "Quality evaluation must expose a bounded list of missing expected words.")
     }
 
     private static func checkRuntimeAudioChunksDoNotPersistIntoMarkdown() async {

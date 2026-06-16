@@ -8,12 +8,13 @@ struct Meeting007RollingWhisperKitSmoke {
     static func main() async throws {
         let arguments = Array(CommandLine.arguments.dropFirst())
         guard let audioPath = arguments.first(where: { !$0.hasPrefix("--") }) else {
-            print("Usage: swift run Meeting007RollingWhisperKitSmoke /path/to/russian-audio.wav [--model-folder /path/to/model]")
+            print("Usage: swift run Meeting007RollingWhisperKitSmoke /path/to/russian-audio.wav [--model-folder /path/to/model] [--expected-text '...'] [--expected-text-file /path/to/text.txt]")
             print("The command prints a local-only rolling-vs-batch comparison and does not save audio or transcript files.")
             return
         }
 
         let modelFolder = try await resolveModelFolder(from: arguments)
+        let expectedText = try expectedText(from: arguments)
         let audioBuffer = try AudioProcessor.loadAudio(fromPath: audioPath)
         let samples = AudioProcessor.convertBufferToArray(buffer: audioBuffer)
         guard !samples.isEmpty else {
@@ -27,9 +28,15 @@ struct Meeting007RollingWhisperKitSmoke {
         print("Samples: \(samples.count)")
         print("")
 
-        try await runRolling(samples: samples, modelFolder: modelFolder)
+        let rollingText = try await runRolling(samples: samples, modelFolder: modelFolder)
         print("")
-        try await runBatch(samples: samples, modelFolder: modelFolder)
+        let batchText = try await runBatch(samples: samples, modelFolder: modelFolder)
+
+        if let expectedText {
+            print("")
+            printQualityEvaluation(label: "Rolling", expected: expectedText, recognized: rollingText)
+            printQualityEvaluation(label: "Batch", expected: expectedText, recognized: batchText)
+        }
     }
 
     private static func resolveModelFolder(from arguments: [String]) async throws -> URL {
@@ -46,7 +53,22 @@ struct Meeting007RollingWhisperKitSmoke {
         }
     }
 
-    private static func runRolling(samples: [Float], modelFolder: URL) async throws {
+    private static func expectedText(from arguments: [String]) throws -> String? {
+        if let index = arguments.firstIndex(of: "--expected-text-file"), arguments.indices.contains(index + 1) {
+            return try String(
+                contentsOf: URL(fileURLWithPath: arguments[index + 1]),
+                encoding: .utf8
+            )
+        }
+
+        if let index = arguments.firstIndex(of: "--expected-text"), arguments.indices.contains(index + 1) {
+            return arguments[index + 1]
+        }
+
+        return nil
+    }
+
+    private static func runRolling(samples: [Float], modelFolder: URL) async throws -> String {
         let rollingEngine = LocalWhisperKitRollingWindowEngine(modelFolder: modelFolder.path)
         let rollingDecoder = WhisperKitRollingWindowTranscriber(engine: rollingEngine)
         let start = await rollingDecoder.prepare()
@@ -106,9 +128,10 @@ struct Meeting007RollingWhisperKitSmoke {
         await rollingDecoder.stop()
         await session.stop()
         _ = tickIndex
+        return finalUpdate.visibleText
     }
 
-    private static func runBatch(samples: [Float], modelFolder: URL) async throws {
+    private static func runBatch(samples: [Float], modelFolder: URL) async throws -> String {
         let batchEngine = LocalWhisperKitTranscriptionEngine(modelFolder: modelFolder.path)
         try await batchEngine.prepare()
 
@@ -117,6 +140,7 @@ struct Meeting007RollingWhisperKitSmoke {
         let chunkSampleCount = Int(sampleRate * 5)
         let sessionID = UUID()
         var offset = 0
+        var transcript: [String] = []
 
         while offset < samples.count {
             let end = min(offset + chunkSampleCount, samples.count)
@@ -133,10 +157,33 @@ struct Meeting007RollingWhisperKitSmoke {
             let text = try await batchEngine.transcribe(speechChunk, language: "ru")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             print(String(format: "[batch %05.1f-%05.1fs] %@", startedAt, startedAt + duration, text))
+            if !text.isEmpty {
+                transcript.append(text)
+            }
             offset = end
         }
 
         await batchEngine.stop()
+        return transcript.joined(separator: " ")
+    }
+
+    private static func printQualityEvaluation(label: String, expected: String, recognized: String) {
+        let evaluation = TranscriptQualityEvaluation.evaluate(expected: expected, recognized: recognized)
+        let passesRecommendedSmoke = evaluation.wordErrorRate <= 0.30 && evaluation.characterErrorRate <= 0.15
+        print("== \(label) quality vs expected text ==")
+        print("Recommended threshold: \(passesRecommendedSmoke ? "PASS" : "REVIEW")")
+        print(String(format: "WER: %.3f", evaluation.wordErrorRate))
+        print(String(format: "CER: %.3f", evaluation.characterErrorRate))
+        print(String(format: "Recall: %.3f", evaluation.recall))
+        print(String(format: "Precision: %.3f", evaluation.precision))
+        print("Matched expected words: \(evaluation.matchedExpectedWordCount)/\(evaluation.expectedWordCount)")
+        print("Recognized words: \(evaluation.recognizedWordCount)")
+        if evaluation.missingExpectedWords.isEmpty {
+            print("Missing expected words sample: none")
+        } else {
+            print("Missing expected words sample: \(evaluation.missingExpectedWords.joined(separator: ", "))")
+        }
+        print("Privacy: expected text and audio are external inputs and were not written by this command.")
     }
 }
 

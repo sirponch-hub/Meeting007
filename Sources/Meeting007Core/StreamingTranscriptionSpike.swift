@@ -140,6 +140,122 @@ public struct StreamingTranscriptUpdate: Equatable, Sendable {
     }
 }
 
+public struct TranscriptQualityEvaluation: Equatable, Sendable {
+    public let expectedWordCount: Int
+    public let recognizedWordCount: Int
+    public let matchedExpectedWordCount: Int
+    public let recall: Double
+    public let precision: Double
+    public let wordErrorRate: Double
+    public let characterErrorRate: Double
+    public let missingExpectedWords: [String]
+
+    public init(
+        expectedWordCount: Int,
+        recognizedWordCount: Int,
+        matchedExpectedWordCount: Int,
+        recall: Double,
+        precision: Double,
+        wordErrorRate: Double,
+        characterErrorRate: Double,
+        missingExpectedWords: [String]
+    ) {
+        self.expectedWordCount = expectedWordCount
+        self.recognizedWordCount = recognizedWordCount
+        self.matchedExpectedWordCount = matchedExpectedWordCount
+        self.recall = recall
+        self.precision = precision
+        self.wordErrorRate = wordErrorRate
+        self.characterErrorRate = characterErrorRate
+        self.missingExpectedWords = missingExpectedWords
+    }
+
+    public static func evaluate(
+        expected: String,
+        recognized: String,
+        missingLimit: Int = 24
+    ) -> TranscriptQualityEvaluation {
+        let expectedWords = words(in: expected)
+        let recognizedWords = words(in: recognized)
+        let normalizedExpectedText = normalizedText(expected)
+        let normalizedRecognizedText = normalizedText(recognized)
+        var recognizedCounts = Dictionary(grouping: recognizedWords, by: { $0 })
+            .mapValues(\.count)
+        var matched = 0
+        var missing: [String] = []
+
+        for word in expectedWords {
+            if let count = recognizedCounts[word], count > 0 {
+                recognizedCounts[word] = count - 1
+                matched += 1
+            } else if missing.count < missingLimit {
+                missing.append(word)
+            }
+        }
+
+        let recall = expectedWords.isEmpty ? 1 : Double(matched) / Double(expectedWords.count)
+        let precision = recognizedWords.isEmpty ? 0 : Double(matched) / Double(recognizedWords.count)
+        let wordErrorRate = expectedWords.isEmpty
+            ? 0
+            : Double(editDistance(expectedWords, recognizedWords)) / Double(expectedWords.count)
+        let characterErrorRate = normalizedExpectedText.isEmpty
+            ? 0
+            : Double(editDistance(Array(normalizedExpectedText), Array(normalizedRecognizedText))) / Double(normalizedExpectedText.count)
+        return TranscriptQualityEvaluation(
+            expectedWordCount: expectedWords.count,
+            recognizedWordCount: recognizedWords.count,
+            matchedExpectedWordCount: matched,
+            recall: recall,
+            precision: precision,
+            wordErrorRate: wordErrorRate,
+            characterErrorRate: characterErrorRate,
+            missingExpectedWords: missing
+        )
+    }
+
+    private static func words(in text: String) -> [String] {
+        normalizedText(text)
+            .split(separator: " ")
+            .map(String.init)
+    }
+
+    private static func normalizedText(_ text: String) -> String {
+        text
+            .lowercased()
+            .replacingOccurrences(of: "ё", with: "е")
+            .replacingOccurrences(of: "[^\\p{L}\\p{N}]+", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func editDistance<T: Equatable>(_ expected: [T], _ recognized: [T]) -> Int {
+        if expected.isEmpty {
+            return recognized.count
+        }
+        if recognized.isEmpty {
+            return expected.count
+        }
+
+        var previous = Array(0...recognized.count)
+        var current = Array(repeating: 0, count: recognized.count + 1)
+
+        for expectedIndex in 1...expected.count {
+            current[0] = expectedIndex
+            for recognizedIndex in 1...recognized.count {
+                let substitutionCost = expected[expectedIndex - 1] == recognized[recognizedIndex - 1] ? 0 : 1
+                current[recognizedIndex] = min(
+                    previous[recognizedIndex] + 1,
+                    current[recognizedIndex - 1] + 1,
+                    previous[recognizedIndex - 1] + substitutionCost
+                )
+            }
+            swap(&previous, &current)
+        }
+
+        return previous[recognized.count]
+    }
+}
+
 public struct LocalAgreementTranscriptStabilizer: Sendable {
     private var previousHypothesis = ""
     private var committedText = ""

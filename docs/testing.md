@@ -46,8 +46,9 @@ Use deterministic fixtures:
 - Fake rolling-window decoder for streaming-partial spike checks before real WhisperKit rolling decode is wired.
 - Fake HuggingFace repository and file fetcher for installer checks without network or a 626 MB model download.
 - Optional local WhisperKit model path for manual spike proof; ordinary checks must not require downloading or committing model files.
-- Optional local Russian audio fixture for side-by-side rolling-vs-batch WhisperKit benchmark; fixture must be consented, uncommitted, and outside tracked repo files.
+- Optional local Russian audio fixture for side-by-side rolling-vs-batch WhisperKit benchmark; fixture and expected transcript text must be consented, uncommitted, and outside tracked repo files.
 - Manual rolling-vs-batch smoke command: `swift run Meeting007RollingWhisperKitSmoke /path/to/russian-audio.wav`; use only local consented audio, inspect terminal output, and do not commit the fixture or output.
+- Manual quality smoke command: `swift run Meeting007RollingWhisperKitSmoke /path/to/russian-audio.wav --expected-text-file /path/to/expected.txt`; the command prints aggregate WER/CER, recall/precision, and a bounded missing-word sample without writing audio, expected text, or recognized transcript to the repository.
 - Temporary SQLite database.
 - Temporary Markdown output folder.
 - Fake transcript-folder settings store.
