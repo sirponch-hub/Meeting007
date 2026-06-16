@@ -256,6 +256,81 @@ public struct TranscriptQualityEvaluation: Equatable, Sendable {
     }
 }
 
+public struct TranscriptTailReconciler: Sendable {
+    public init() {}
+
+    public func appendMissingTail(
+        primary: String,
+        tailCandidate: String,
+        minimumOverlapWordCount: Int = 3
+    ) -> String {
+        let primaryTokens = tokens(in: primary)
+        let candidateTokens = tokens(in: tailCandidate)
+        guard primaryTokens.count >= minimumOverlapWordCount,
+              candidateTokens.count >= minimumOverlapWordCount else {
+            return primary
+        }
+
+        let normalizedPrimary = primaryTokens.map(\.normalized)
+        let normalizedCandidate = candidateTokens.map(\.normalized)
+        if containsSubsequence(normalizedCandidate, in: normalizedPrimary) {
+            return primary
+        }
+
+        let maximumOverlap = min(primaryTokens.count, candidateTokens.count)
+        for overlap in stride(from: maximumOverlap, through: minimumOverlapWordCount, by: -1) {
+            let primarySuffix = Array(normalizedPrimary.suffix(overlap))
+            guard candidateTokens.count >= overlap else {
+                continue
+            }
+
+            for candidateStart in 0...(candidateTokens.count - overlap) {
+                let candidateSlice = Array(normalizedCandidate[candidateStart..<(candidateStart + overlap)])
+                if primarySuffix != candidateSlice {
+                    continue
+                }
+
+                let suffix = candidateTokens.dropFirst(candidateStart + overlap).map(\.raw).joined(separator: " ")
+                guard !suffix.isEmpty else {
+                    return primary
+                }
+                return [primary.trimmingCharacters(in: .whitespacesAndNewlines), suffix]
+                    .filter { !$0.isEmpty }
+                    .joined(separator: " ")
+            }
+        }
+
+        return primary
+    }
+
+    private func tokens(in text: String) -> [(raw: String, normalized: String)] {
+        text
+            .split(whereSeparator: \.isWhitespace)
+            .map { rawWord in
+                let raw = String(rawWord)
+                let normalized = raw
+                    .lowercased()
+                    .replacingOccurrences(of: "ё", with: "е")
+                    .replacingOccurrences(of: "[^\\p{L}\\p{N}]+", with: "", options: .regularExpression)
+                return (raw: raw, normalized: normalized)
+            }
+            .filter { !$0.normalized.isEmpty }
+    }
+
+    private func containsSubsequence(_ needle: [String], in haystack: [String]) -> Bool {
+        guard !needle.isEmpty, haystack.count >= needle.count else {
+            return false
+        }
+
+        for start in 0...(haystack.count - needle.count) {
+            if Array(haystack[start..<(start + needle.count)]) == needle {
+                return true
+            }
+        }
+        return false
+    }
+}
+
 public struct LocalAgreementTranscriptStabilizer: Sendable {
     private var previousHypothesis = ""
     private var committedText = ""

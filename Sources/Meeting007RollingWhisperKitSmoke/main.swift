@@ -42,15 +42,21 @@ struct Meeting007RollingWhisperKitSmoke {
             modelFolder: modelFolder,
             printChunks: !quietTranscript
         )
+        let reconciledRollingText = TranscriptTailReconciler()
+            .appendMissingTail(primary: rollingText, tailCandidate: batchText)
+        let didAppendTail = reconciledRollingText != rollingText
 
         if let expectedText {
             if showFinalText && !verboseLive {
                 print("")
-                printFinalText(label: "Rolling", text: rollingText)
+                printFinalText(label: didAppendTail ? "Rolling + QA tail reconciliation" : "Rolling", text: reconciledRollingText)
                 printFinalText(label: "Batch", text: batchText)
             }
             print("")
-            printQualityEvaluation(label: "Rolling", expected: expectedText, recognized: rollingText)
+            if didAppendTail {
+                print("QA tail reconciliation: appended non-overlapping batch suffix to rolling final text for smoke evaluation only.")
+            }
+            printQualityEvaluation(label: "Rolling", expected: expectedText, recognized: reconciledRollingText)
             printQualityEvaluation(label: "Batch", expected: expectedText, recognized: batchText)
         }
     }

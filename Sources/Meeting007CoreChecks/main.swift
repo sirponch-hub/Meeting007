@@ -59,6 +59,9 @@ struct Meeting007CoreChecks {
         await checkRollingStreamingSessionKeepsCommittedBeginningAcrossShiftedWindows()
         await checkRollingStreamingSessionFinalizesBestVisibleDraft()
         checkTranscriptQualityEvaluationNormalizesRussianText()
+        checkTranscriptTailReconcilerAppendsMissingEnding()
+        checkTranscriptTailReconcilerDoesNotDuplicateExistingEnding()
+        checkTranscriptTailReconcilerKeepsRollingMiddleWhenBatchIsNoisy()
         await checkRuntimeAudioChunksDoNotPersistIntoMarkdown()
         await checkLocalSTTDefaultsToRussian()
         checkWhisperModelPolicyDefaultsToRussianPinnedModel()
@@ -1165,6 +1168,36 @@ struct Meeting007CoreChecks {
         require(evaluation.wordErrorRate > 0 && evaluation.wordErrorRate < 0.4, "Quality evaluation must expose normalized word error rate.")
         require(evaluation.characterErrorRate > 0 && evaluation.characterErrorRate < 0.3, "Quality evaluation must expose normalized character error rate.")
         require(evaluation.missingExpectedWords == ["с"], "Quality evaluation must expose a bounded list of missing expected words.")
+    }
+
+    private static func checkTranscriptTailReconcilerAppendsMissingEnding() {
+        let rolling = "Файл перепроверен, валидный XML, открывается без ошибок."
+        let batch = "открывается без ошибок. Перезаписал в вашей папке. Теперь PowerPoint не должен ругаться. Откройте заново."
+
+        let reconciled = TranscriptTailReconciler().appendMissingTail(primary: rolling, tailCandidate: batch)
+
+        require(reconciled.contains("Перезаписал в вашей папке."), "Tail reconciliation must append a missing final sentence after an overlapping ending.")
+        require(reconciled.hasPrefix("Файл перепроверен"), "Tail reconciliation must keep rolling text as the primary body.")
+    }
+
+    private static func checkTranscriptTailReconcilerDoesNotDuplicateExistingEnding() {
+        let rolling = "Файл перепроверен, открывается без ошибок. Перезаписал в вашей папке. Теперь PowerPoint не должен ругаться. Откройте заново."
+        let batch = "открывается без ошибок. Перезаписал в вашей папке. Теперь PowerPoint не должен ругаться. Откройте заново."
+
+        let reconciled = TranscriptTailReconciler().appendMissingTail(primary: rolling, tailCandidate: batch)
+
+        require(reconciled == rolling, "Tail reconciliation must not duplicate a final sentence that rolling already contains.")
+    }
+
+    private static func checkTranscriptTailReconcilerKeepsRollingMiddleWhenBatchIsNoisy() {
+        let rolling = "Заменил иконку на корректные фигуры, рамка плюс кружок, солнце плюс две горы. Файл перепроверен, открывается без ошибок."
+        let batch = "Либриофис. Либриофис. Либриофис. Файл перепроверен, открывается без ошибок. Перезаписал в вашей папке."
+
+        let reconciled = TranscriptTailReconciler().appendMissingTail(primary: rolling, tailCandidate: batch)
+
+        require(reconciled.contains("рамка плюс кружок"), "Tail reconciliation must preserve the rolling middle.")
+        require(!reconciled.contains("Либриофис. Либриофис"), "Tail reconciliation must not import noisy batch middle text.")
+        require(reconciled.hasSuffix("Перезаписал в вашей папке."), "Tail reconciliation may append only the missing batch suffix.")
     }
 
     private static func checkRuntimeAudioChunksDoNotPersistIntoMarkdown() async {

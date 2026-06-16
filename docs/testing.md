@@ -49,6 +49,7 @@ Use deterministic fixtures:
 - Optional local Russian audio fixture for side-by-side rolling-vs-batch WhisperKit benchmark; fixture and expected transcript text must be consented, uncommitted, and outside tracked repo files.
 - Manual rolling-vs-batch smoke command: `swift run Meeting007RollingWhisperKitSmoke /path/to/russian-audio.wav`; use only local consented audio, inspect terminal output, and do not commit the fixture or output.
 - Manual quality smoke command: `swift run Meeting007RollingWhisperKitSmoke /path/to/russian-audio.wav --expected-text-file /path/to/expected.txt`; the command hides full live transcript output by default, prints aggregate rolling live counts, WER/CER, recall/precision, and a bounded missing-word sample without writing audio, expected text, or recognized transcript to the repository. Add `--show-final-text` to print each final transcript once for human acceptance; add `--verbose-live` only when diagnosing rolling partial replacement behavior.
+- Quality smoke may mark `QA tail reconciliation` when it appends a non-overlapping batch suffix to the rolling final text. This is a manual QA aid for detecting end-of-audio loss and must not be treated as `Meeting007App`, Markdown, storage, REST, or MCP transcript behavior.
 - Temporary SQLite database.
 - Temporary Markdown output folder.
 - Fake transcript-folder settings store.
