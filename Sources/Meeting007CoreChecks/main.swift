@@ -51,8 +51,12 @@ struct Meeting007CoreChecks {
         checkLocalAgreementStabilizerCommitsOnlyStablePrefix()
         checkRollingSeamFilterRemovesPromptEchoBeforeStabilizer()
         checkRollingSeamFilterCollapsesOverlappingWindowText()
+        checkRollingSeamFilterCollapsesPunctuationAndCaseOverlap()
         checkRollingSeamFilterDoesNotGloballyDedupeRepeatedPhrase()
+        checkRollingSeamFilterPreservesShortRepeatedSpeechAtWindowBoundary()
+        checkLocalAgreementStabilizerRejectsIncompatibleLongerPrefix()
         await checkRollingStreamingSessionReplacesRepeatedPartialInsteadOfAppending()
+        await checkRollingStreamingSessionKeepsCommittedBeginningAcrossShiftedWindows()
         await checkRuntimeAudioChunksDoNotPersistIntoMarkdown()
         await checkLocalSTTDefaultsToRussian()
         checkWhisperModelPolicyDefaultsToRussianPinnedModel()
@@ -1020,9 +1024,21 @@ struct Meeting007CoreChecks {
         var filter = RollingWindowHypothesisSeamFilter()
 
         _ = filter.filter("сегодня обсудим план запуска", committedPrompt: "")
-        let filtered = filter.filter("план запуска и риски релиза", committedPrompt: "")
+        let filtered = filter.filter("обсудим план запуска и риски релиза", committedPrompt: "")
 
         require(filtered == "сегодня обсудим план запуска и риски релиза", "Rolling seam filter must merge only the suffix/prefix overlap between rolling windows.")
+    }
+
+    private static func checkRollingSeamFilterCollapsesPunctuationAndCaseOverlap() {
+        var filter = RollingWindowHypothesisSeamFilter()
+
+        _ = filter.filter("Исправил. Причина ошибки PowerPoint на слайде «Артефакты", committedPrompt: "")
+        let filtered = filter.filter("на слайде артефакты и свидетельства", committedPrompt: "")
+
+        require(
+            filtered == "Исправил. Причина ошибки PowerPoint на слайде «Артефакты и свидетельства",
+            "Rolling seam filter must recognize overlap despite Russian quotes, punctuation, and case changes."
+        )
     }
 
     private static func checkRollingSeamFilterDoesNotGloballyDedupeRepeatedPhrase() {
@@ -1032,6 +1048,26 @@ struct Meeting007CoreChecks {
         let filtered = filter.filter("проверим статус потом проверим статус еще раз", committedPrompt: "")
 
         require(filtered == "проверим статус потом проверим статус еще раз", "Rolling seam filter must preserve real repeated speech instead of global phrase deduplication.")
+    }
+
+    private static func checkRollingSeamFilterPreservesShortRepeatedSpeechAtWindowBoundary() {
+        var filter = RollingWindowHypothesisSeamFilter()
+
+        _ = filter.filter("сначала проверим статус", committedPrompt: "")
+        let filtered = filter.filter("проверим статус еще раз", committedPrompt: "")
+
+        require(filtered == "проверим статус еще раз", "Rolling seam filter must not delete a short repeated phrase that may be real speech at the window boundary.")
+    }
+
+    private static func checkLocalAgreementStabilizerRejectsIncompatibleLongerPrefix() {
+        var stabilizer = LocalAgreementTranscriptStabilizer()
+
+        _ = stabilizer.observe("первая важная фраза встречи")
+        let accepted = stabilizer.observe("первая важная фраза встречи продолжается")
+        let shifted = stabilizer.observe("продолжается дальше по плану")
+
+        require(accepted.committedText == "первая важная фраза", "Test setup must commit the initial trusted beginning.")
+        require(shifted.committedText == "первая важная фраза", "Committed transcript must not be replaced by a later shifted window, even if that window is longer.")
     }
 
     private static func checkRollingStreamingSessionReplacesRepeatedPartialInsteadOfAppending() async {
@@ -1063,6 +1099,27 @@ struct Meeting007CoreChecks {
         require(secondVisibleText == "сегодня обсудим план", "Repeated rolling hypothesis must replace the current live text instead of appending a duplicate.")
         require(thirdVisibleText == "сегодня обсудим план запуска", "Advancing rolling hypothesis must extend the live text once.")
         require(!thirdVisibleText.contains("сегодня обсудим план сегодня обсудим план"), "Rolling streaming session must not expose duplicated overlap as transcript text.")
+    }
+
+    private static func checkRollingStreamingSessionKeepsCommittedBeginningAcrossShiftedWindows() async {
+        let sessionID = UUID()
+        let decoder = ScriptedRollingWindowDecoder(outputs: [
+            "первая важная фраза встречи",
+            "первая важная фраза встречи продолжается",
+            "продолжается дальше по плану"
+        ])
+        let streamingSession = RollingStreamingTranscriptionSession(sessionID: sessionID, decoder: decoder)
+
+        await streamingSession.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0, amplitude: 0.2))
+        _ = try? await streamingSession.tick()
+        await streamingSession.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 1, amplitude: 0.2))
+        let committed = try? await streamingSession.tick()
+        await streamingSession.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 2, amplitude: 0.2))
+        let shifted = try? await streamingSession.tick()
+
+        require(committed?.committedText == "первая важная фраза", "Rolling session must first commit the stable beginning.")
+        require(shifted?.committedText.hasPrefix("первая важная фраза") == true, "Rolling session must keep the accepted beginning when later windows shift forward.")
+        require(shifted?.committedText.contains("продолжается дальше") != true, "Shifted later window must stay partial until it is anchored to committed text.")
     }
 
     private static func checkRuntimeAudioChunksDoNotPersistIntoMarkdown() async {

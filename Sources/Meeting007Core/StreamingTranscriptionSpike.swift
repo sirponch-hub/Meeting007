@@ -145,7 +145,8 @@ public struct LocalAgreementTranscriptStabilizer: Sendable {
         let candidate = commonPrefix(previousHypothesis, normalizedHypothesis)
         let newCommit = trimToLastWord(candidate)
 
-        if newCommit.count > committedText.count {
+        if newCommit.count > committedText.count,
+           (committedText.isEmpty || newCommit.hasPrefix(committedText)) {
             committedText = newCommit
         }
 
@@ -187,6 +188,7 @@ public struct LocalAgreementTranscriptStabilizer: Sendable {
 }
 
 public struct RollingWindowHypothesisSeamFilter: Sendable {
+    private let minimumOverlapWordCount = 3
     private var previousFilteredHypothesis = ""
 
     public init() {}
@@ -243,14 +245,20 @@ public struct RollingWindowHypothesisSeamFilter: Sendable {
 
         let previousWords = previousFilteredHypothesis.split(separator: " ")
         let currentWords = hypothesis.split(separator: " ")
+        let normalizedPreviousWords = previousWords.map(normalizeWord)
+        let normalizedCurrentWords = currentWords.map(normalizeWord)
         let maximumOverlap = min(previousWords.count, currentWords.count)
         guard maximumOverlap > 0 else {
             return hypothesis
         }
 
-        for overlap in stride(from: maximumOverlap, through: 1, by: -1) {
-            let previousSuffix = previousWords.suffix(overlap)
-            let currentPrefix = currentWords.prefix(overlap)
+        guard maximumOverlap >= minimumOverlapWordCount else {
+            return hypothesis
+        }
+
+        for overlap in stride(from: maximumOverlap, through: minimumOverlapWordCount, by: -1) {
+            let previousSuffix = normalizedPreviousWords.suffix(overlap)
+            let currentPrefix = normalizedCurrentWords.prefix(overlap)
             if Array(previousSuffix) == Array(currentPrefix) {
                 let currentRemainder = currentWords.dropFirst(overlap)
                 return ([previousFilteredHypothesis] + currentRemainder.map(String.init))
@@ -266,6 +274,12 @@ public struct RollingWindowHypothesisSeamFilter: Sendable {
         text
             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func normalizeWord(_ word: Substring) -> String {
+        String(word)
+            .lowercased()
+            .trimmingCharacters(in: .punctuationCharacters.union(.symbols))
     }
 }
 
