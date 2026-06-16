@@ -8,7 +8,7 @@ struct Meeting007RollingWhisperKitSmoke {
     static func main() async throws {
         let arguments = Array(CommandLine.arguments.dropFirst())
         guard let audioPath = arguments.first(where: { !$0.hasPrefix("--") }) else {
-            print("Usage: swift run Meeting007RollingWhisperKitSmoke /path/to/russian-audio.wav [--model-folder /path/to/model] [--expected-text '...'] [--expected-text-file /path/to/text.txt]")
+            print("Usage: swift run Meeting007RollingWhisperKitSmoke /path/to/russian-audio.wav [--model-folder /path/to/model] [--expected-text '...'] [--expected-text-file /path/to/text.txt] [--show-final-text] [--verbose-live]")
             print("The command prints a local-only rolling-vs-batch comparison and does not save audio or transcript files.")
             return
         }
@@ -16,6 +16,7 @@ struct Meeting007RollingWhisperKitSmoke {
         let modelFolder = try await resolveModelFolder(from: arguments)
         let expectedText = try expectedText(from: arguments)
         let verboseLive = arguments.contains("--verbose-live")
+        let showFinalText = arguments.contains("--show-final-text")
         let quietTranscript = expectedText != nil && !verboseLive
         let audioBuffer = try AudioProcessor.loadAudio(fromPath: audioPath)
         let samples = AudioProcessor.convertBufferToArray(buffer: audioBuffer)
@@ -43,6 +44,11 @@ struct Meeting007RollingWhisperKitSmoke {
         )
 
         if let expectedText {
+            if showFinalText && !verboseLive {
+                print("")
+                printFinalText(label: "Rolling", text: rollingText)
+                printFinalText(label: "Batch", text: batchText)
+            }
             print("")
             printQualityEvaluation(label: "Rolling", expected: expectedText, recognized: rollingText)
             printQualityEvaluation(label: "Batch", expected: expectedText, recognized: batchText)
@@ -226,6 +232,15 @@ struct Meeting007RollingWhisperKitSmoke {
             print("Missing expected words sample: \(evaluation.missingExpectedWords.joined(separator: ", "))")
         }
         print("Privacy: expected text and audio are external inputs and were not written by this command.")
+    }
+
+    private static func printFinalText(label: String, text: String) {
+        print("== \(label) final text ==")
+        if text.isEmpty {
+            print("(empty)")
+        } else {
+            print(text)
+        }
     }
 }
 
