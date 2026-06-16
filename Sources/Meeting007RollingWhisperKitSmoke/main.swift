@@ -15,6 +15,8 @@ struct Meeting007RollingWhisperKitSmoke {
 
         let modelFolder = try await resolveModelFolder(from: arguments)
         let expectedText = try expectedText(from: arguments)
+        let verboseLive = arguments.contains("--verbose-live")
+        let quietTranscript = expectedText != nil && !verboseLive
         let audioBuffer = try AudioProcessor.loadAudio(fromPath: audioPath)
         let samples = AudioProcessor.convertBufferToArray(buffer: audioBuffer)
         guard !samples.isEmpty else {
@@ -28,9 +30,17 @@ struct Meeting007RollingWhisperKitSmoke {
         print("Samples: \(samples.count)")
         print("")
 
-        let rollingText = try await runRolling(samples: samples, modelFolder: modelFolder)
+        let rollingText = try await runRolling(
+            samples: samples,
+            modelFolder: modelFolder,
+            printLiveTranscript: !quietTranscript
+        )
         print("")
-        let batchText = try await runBatch(samples: samples, modelFolder: modelFolder)
+        let batchText = try await runBatch(
+            samples: samples,
+            modelFolder: modelFolder,
+            printChunks: !quietTranscript
+        )
 
         if let expectedText {
             print("")
@@ -68,7 +78,11 @@ struct Meeting007RollingWhisperKitSmoke {
         return nil
     }
 
-    private static func runRolling(samples: [Float], modelFolder: URL) async throws -> String {
+    private static func runRolling(
+        samples: [Float],
+        modelFolder: URL,
+        printLiveTranscript: Bool
+    ) async throws -> String {
         let rollingEngine = LocalWhisperKitRollingWindowEngine(modelFolder: modelFolder.path)
         let rollingDecoder = WhisperKitRollingWindowTranscriber(engine: rollingEngine)
         let start = await rollingDecoder.prepare()
@@ -85,10 +99,15 @@ struct Meeting007RollingWhisperKitSmoke {
         )
 
         print("== Rolling window every 1s ==")
+        if !printLiveTranscript {
+            print("Live transcript output: hidden for quality smoke. Use --verbose-live to print replacement states.")
+        }
         let sampleRate = RuntimeAudioFrameNormalizer.defaultTargetSampleRate
         let stepSampleCount = Int(sampleRate)
         var offset = 0
         var lastPrintedUpdate = StreamingTranscriptUpdate(committedText: "", partialText: "")
+        var changedUpdateCount = 0
+        var changedPartialCount = 0
         var tickIndex = 0
 
         while offset < samples.count {
@@ -109,9 +128,15 @@ struct Meeting007RollingWhisperKitSmoke {
 
             let update = try await session.tick()
             if update != lastPrintedUpdate {
-                print(String(format: "[rolling %05.1fs] committed: %@", startedAt + duration, update.committedText))
-                if !update.partialText.isEmpty {
-                    print(String(format: "[rolling %05.1fs] partial: %@", startedAt + duration, update.partialText))
+                changedUpdateCount += 1
+                if update.partialText != lastPrintedUpdate.partialText {
+                    changedPartialCount += 1
+                }
+                if printLiveTranscript {
+                    print(String(format: "[rolling %05.1fs] committed: %@", startedAt + duration, update.committedText))
+                    if !update.partialText.isEmpty {
+                        print(String(format: "[rolling %05.1fs] partial: %@", startedAt + duration, update.partialText))
+                    }
                 }
                 lastPrintedUpdate = update
             }
@@ -121,8 +146,13 @@ struct Meeting007RollingWhisperKitSmoke {
         }
 
         let finalUpdate = await session.finalizeBestEffortDraft()
-        print("[rolling final] committed: \(finalUpdate.committedText)")
-        if !finalUpdate.partialText.isEmpty {
+        if printLiveTranscript {
+            print("[rolling final] committed: \(finalUpdate.committedText)")
+        } else {
+            print("[rolling final] recognized words: \(TranscriptQualityEvaluation.evaluate(expected: finalUpdate.visibleText, recognized: finalUpdate.visibleText).recognizedWordCount)")
+            print("[rolling live] ticks: \(tickIndex), changed states: \(changedUpdateCount), changed partials: \(changedPartialCount)")
+        }
+        if printLiveTranscript && !finalUpdate.partialText.isEmpty {
             print("[rolling final] partial: \(finalUpdate.partialText)")
         }
         await rollingDecoder.stop()
@@ -131,11 +161,18 @@ struct Meeting007RollingWhisperKitSmoke {
         return finalUpdate.visibleText
     }
 
-    private static func runBatch(samples: [Float], modelFolder: URL) async throws -> String {
+    private static func runBatch(
+        samples: [Float],
+        modelFolder: URL,
+        printChunks: Bool
+    ) async throws -> String {
         let batchEngine = LocalWhisperKitTranscriptionEngine(modelFolder: modelFolder.path)
         try await batchEngine.prepare()
 
         print("== Batch 5s chunks ==")
+        if !printChunks {
+            print("Chunk transcript output: hidden for quality smoke. Use --verbose-live to print chunk text.")
+        }
         let sampleRate = RuntimeAudioFrameNormalizer.defaultTargetSampleRate
         let chunkSampleCount = Int(sampleRate * 5)
         let sessionID = UUID()
@@ -156,7 +193,9 @@ struct Meeting007RollingWhisperKitSmoke {
             )
             let text = try await batchEngine.transcribe(speechChunk, language: "ru")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            print(String(format: "[batch %05.1f-%05.1fs] %@", startedAt, startedAt + duration, text))
+            if printChunks {
+                print(String(format: "[batch %05.1f-%05.1fs] %@", startedAt, startedAt + duration, text))
+            }
             if !text.isEmpty {
                 transcript.append(text)
             }
@@ -164,6 +203,9 @@ struct Meeting007RollingWhisperKitSmoke {
         }
 
         await batchEngine.stop()
+        if !printChunks {
+            print("[batch final] recognized chunks: \(transcript.count)")
+        }
         return transcript.joined(separator: " ")
     }
 
