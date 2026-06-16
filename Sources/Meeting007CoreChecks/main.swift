@@ -57,6 +57,7 @@ struct Meeting007CoreChecks {
         checkLocalAgreementStabilizerRejectsIncompatibleLongerPrefix()
         await checkRollingStreamingSessionReplacesRepeatedPartialInsteadOfAppending()
         await checkRollingStreamingSessionKeepsCommittedBeginningAcrossShiftedWindows()
+        await checkRollingStreamingSessionFinalizesBestVisibleDraft()
         await checkRuntimeAudioChunksDoNotPersistIntoMarkdown()
         await checkLocalSTTDefaultsToRussian()
         checkWhisperModelPolicyDefaultsToRussianPinnedModel()
@@ -1120,6 +1121,33 @@ struct Meeting007CoreChecks {
         require(committed?.committedText == "первая важная фраза", "Rolling session must first commit the stable beginning.")
         require(shifted?.committedText.hasPrefix("первая важная фраза") == true, "Rolling session must keep the accepted beginning when later windows shift forward.")
         require(shifted?.committedText.contains("продолжается дальше") != true, "Shifted later window must stay partial until it is anchored to committed text.")
+    }
+
+    private static func checkRollingStreamingSessionFinalizesBestVisibleDraft() async {
+        let sessionID = UUID()
+        let decoder = ScriptedRollingWindowDecoder(outputs: [
+            "исправил причина ошибки powerpoint",
+            "исправил причина ошибки powerpoint на слайде артефакты и свидетельства",
+            "на слайде артефакты и свидетельства иконка картинка"
+        ])
+        let streamingSession = RollingStreamingTranscriptionSession(sessionID: sessionID, decoder: decoder)
+
+        await streamingSession.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0, amplitude: 0.2))
+        _ = try? await streamingSession.tick()
+        await streamingSession.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 1, amplitude: 0.2))
+        let bestLiveUpdate = try? await streamingSession.tick()
+        await streamingSession.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 2, amplitude: 0.2))
+        _ = try? await streamingSession.tick()
+
+        let final = await streamingSession.finalizeBestEffortDraft()
+
+        require(
+            (bestLiveUpdate?.visibleText.count ?? 0) > (bestLiveUpdate?.committedText.count ?? 0),
+            "Test setup must have a visible live draft longer than the committed prefix."
+        )
+        require(final.partialText.isEmpty, "Best-effort finalization must return a single final draft string.")
+        require(final.committedText.contains("на слайде артефакты и свидетельства"), "Best-effort finalization must not drop the longer visible live draft.")
+        require(final.committedText.hasPrefix("исправил причина ошибки powerpoint"), "Best-effort finalization must keep the accepted beginning.")
     }
 
     private static func checkRuntimeAudioChunksDoNotPersistIntoMarkdown() async {

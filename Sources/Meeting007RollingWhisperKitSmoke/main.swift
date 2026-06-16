@@ -98,7 +98,7 @@ struct Meeting007RollingWhisperKitSmoke {
             offset = end
         }
 
-        let finalUpdate = try await session.tick()
+        let finalUpdate = await session.finalizeBestEffortDraft()
         print("[rolling final] committed: \(finalUpdate.committedText)")
         if !finalUpdate.partialText.isEmpty {
             print("[rolling final] partial: \(finalUpdate.partialText)")

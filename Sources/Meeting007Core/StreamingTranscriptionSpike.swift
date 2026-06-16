@@ -132,6 +132,12 @@ public struct StreamingTranscriptUpdate: Equatable, Sendable {
         self.committedText = committedText
         self.partialText = partialText
     }
+
+    public var visibleText: String {
+        [committedText, partialText]
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
 }
 
 public struct LocalAgreementTranscriptStabilizer: Sendable {
@@ -292,6 +298,7 @@ public actor RollingStreamingTranscriptionSession {
     private var stabilizer = LocalAgreementTranscriptStabilizer()
     private var seamFilter = RollingWindowHypothesisSeamFilter()
     private var lastUpdate = StreamingTranscriptUpdate(committedText: "", partialText: "")
+    private var bestVisibleDraft = ""
 
     public init(
         sessionID: UUID,
@@ -323,7 +330,13 @@ public actor RollingStreamingTranscriptionSession {
         let hypothesis = try await decoder.transcribe(window: window, prompt: committedPrompt)
         let filteredHypothesis = seamFilter.filter(hypothesis.text, committedPrompt: committedPrompt)
         lastUpdate = stabilizer.observe(filteredHypothesis)
+        rememberVisibleDraft(lastUpdate)
         return lastUpdate
+    }
+
+    public func finalizeBestEffortDraft() -> StreamingTranscriptUpdate {
+        let finalText = bestVisibleDraft.isEmpty ? lastUpdate.visibleText : bestVisibleDraft
+        return StreamingTranscriptUpdate(committedText: finalText, partialText: "")
     }
 
     public func bufferedDuration() -> TimeInterval {
@@ -335,5 +348,13 @@ public actor RollingStreamingTranscriptionSession {
         stabilizer = LocalAgreementTranscriptStabilizer()
         seamFilter.reset()
         lastUpdate = StreamingTranscriptUpdate(committedText: "", partialText: "")
+        bestVisibleDraft = ""
+    }
+
+    private func rememberVisibleDraft(_ update: StreamingTranscriptUpdate) {
+        let visibleText = update.visibleText
+        if visibleText.count > bestVisibleDraft.count {
+            bestVisibleDraft = visibleText
+        }
     }
 }
