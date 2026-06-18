@@ -736,6 +736,9 @@ final class AVAudioEngineMicrophoneCaptureDriver: MicrophoneCaptureDriver, @unch
     private var engine: AVAudioEngine?
     private var activeSessionID: UUID?
     private var emittedSampleCount = 0
+    private var deliveryTasks: [UUID: Task<Void, Never>] = [:]
+    private var registeringDeliveryTaskCount = 0
+    private var isStoppingDelivery = false
 
     init(statusModel: MicrophoneCaptureStatusModel, deviceSettings: MicrophoneDeviceSelectionSettings = MicrophoneDeviceSelectionSettings()) {
         self.statusModel = statusModel
@@ -771,9 +774,23 @@ final class AVAudioEngineMicrophoneCaptureDriver: MicrophoneCaptureDriver, @unch
 
         stateLock.withLock {
             emittedSampleCount = 0
+            deliveryTasks.removeAll()
+            registeringDeliveryTaskCount = 0
+            isStoppingDelivery = false
         }
         inputNode.installTap(onBus: 0, bufferSize: 1_024, format: format) { [weak self] buffer, _ in
             guard let self else {
+                return
+            }
+
+            let shouldDeliver = self.stateLock.withLock {
+                guard self.activeSessionID == session.id, !self.isStoppingDelivery else {
+                    return false
+                }
+                self.registeringDeliveryTaskCount += 1
+                return true
+            }
+            guard shouldDeliver else {
                 return
             }
 
@@ -785,18 +802,27 @@ final class AVAudioEngineMicrophoneCaptureDriver: MicrophoneCaptureDriver, @unch
                 self.emittedSampleCount += normalizedSamples.frameCount
                 return offset
             }
-            Task {
-                await consumer.receive(CapturedAudioChunk(
-                    sessionID: session.id,
-                    lane: .mic,
-                    startedAt: startedAtOffset,
-                    duration: duration,
-                    sampleRate: normalizedSamples.sampleRate,
-                    channelCount: normalizedSamples.channelCount,
-                    byteCount: normalizedSamples.byteCount,
-                    samples: normalizedSamples
-                ))
-                await self.updateStatus(level > 0.03 ? .listening(level: level) : .quiet)
+            let deliveryTaskID = UUID()
+            var deliveryTask: Task<Void, Never>!
+            self.stateLock.withLock {
+                deliveryTask = Task {
+                    await consumer.receive(CapturedAudioChunk(
+                        sessionID: session.id,
+                        lane: .mic,
+                        startedAt: startedAtOffset,
+                        duration: duration,
+                        sampleRate: normalizedSamples.sampleRate,
+                        channelCount: normalizedSamples.channelCount,
+                        byteCount: normalizedSamples.byteCount,
+                        samples: normalizedSamples
+                    ))
+                    await self.updateStatus(level > 0.03 ? .listening(level: level) : .quiet)
+                    self.stateLock.withLock {
+                        self.deliveryTasks[deliveryTaskID] = nil
+                    }
+                }
+                self.deliveryTasks[deliveryTaskID] = deliveryTask
+                self.registeringDeliveryTaskCount -= 1
             }
         }
 
@@ -809,6 +835,7 @@ final class AVAudioEngineMicrophoneCaptureDriver: MicrophoneCaptureDriver, @unch
         } catch {
             inputNode.removeTap(onBus: 0)
             nextEngine.stop()
+            await drainDeliveryTasks()
             await updateStatus(.failed("Microphone capture stopped unexpectedly. Your current transcript is still local."))
             throw RecordingFailure(
                 code: "microphone_capture_start_failed",
@@ -834,7 +861,36 @@ final class AVAudioEngineMicrophoneCaptureDriver: MicrophoneCaptureDriver, @unch
 
         stopState.1?.inputNode.removeTap(onBus: 0)
         stopState.1?.stop()
+        await drainDeliveryTasks()
         await updateStatus(.idle)
+    }
+
+    private func drainDeliveryTasks() async {
+        stateLock.withLock {
+            isStoppingDelivery = true
+        }
+
+        while true {
+            let pendingTasks = stateLock.withLock {
+                Array(deliveryTasks.values)
+            }
+
+            for task in pendingTasks {
+                await task.value
+            }
+
+            let isDrained = stateLock.withLock {
+                deliveryTasks.isEmpty && registeringDeliveryTaskCount == 0
+            }
+            if isDrained {
+                stateLock.withLock {
+                    isStoppingDelivery = false
+                }
+                return
+            }
+
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
     }
 
     private func requestMicrophoneAccess() async -> Bool {

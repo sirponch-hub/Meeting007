@@ -28,7 +28,7 @@ Required coverage:
 - HuggingFace model downloader behavior: pinned Russian source, required WhisperKit CoreML/config/tokenizer entries, staging-before-promotion, per-file SHA-256 manifest writing, checksum mismatch rejection, missing required-file rejection, and offline reuse from `install.json` without network calls.
 - WhisperKit adapter behavior: isolated SwiftPM adapter target compiles against the real `WhisperKit` product, defaults to Russian, accepts only normalized `SpeechChunk` input, builds the production engine only from a verified local model directory, returns stable missing-model state without automatic download, maps engine output to transcript segments, exposes runtime failures, and preserves fake STT checks.
 - WhisperKit rolling adapter behavior: builds a rolling-window engine only from a verified local model directory, keeps Russian defaults, forwards rolling audio windows and committed prompt context, maps fake engine output to `RollingTranscriptionHypothesis`, exposes runtime failures, and does not replace the production recording flow until manual side-by-side QA passes.
-- App transcription composition behavior: production recording uses the WhisperKit rolling pipeline factory, forwards active runtime mic PCM into the rolling live path, replays early in-memory chunks captured during model preparation, replaces one live partial segment instead of appending duplicates, ignores replayed duplicate chunks, and must not emit deterministic fake transcript text when the model is missing or invalid.
+- App transcription composition behavior: production recording uses the WhisperKit rolling pipeline factory, forwards active runtime mic PCM into the rolling live path, replays early in-memory chunks captured during model preparation, replaces one live partial segment instead of appending duplicates, ignores replayed duplicate chunks, runs one timeout-bounded final rolling decode on Stop when audio arrived after the last live tick, falls back to the best visible draft if that decode times out, and must not emit deterministic fake transcript text when the model is missing or invalid.
 - Completed-session runtime history after Stop.
 - In-memory history deduplication and newest-first ordering.
 - Google Calendar event mapping from title/topic, time, and participants into local meeting metadata using mocked provider fixtures.
@@ -84,7 +84,7 @@ Use deterministic fixtures:
 - With the model missing or corrupted, verify recording remains controllable and the transcript panel says transcription is unavailable without fake transcript text.
 - Sit quietly for several seconds and verify silence does not create new transcript text.
 - Stop while speaking and verify the last spoken phrase is not silently lost by the capture/VAD boundary.
-- Stop after live rolling text is delayed and verify the app preserves the best visible local rolling transcript without waiting indefinitely.
+- Stop after live rolling text is delayed and verify the app pulls in the latest already-captured rolling tail when available, otherwise preserving the best visible local rolling transcript without waiting indefinitely.
 - Deny microphone access and verify the app shows a recoverable blocked state without starting fake transcript preview.
 - Stop recording and verify mic activity stops.
 - Start/Stop recording multiple times and verify no duplicate mic activity indicators or stale recording states remain.

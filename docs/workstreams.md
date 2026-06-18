@@ -51,18 +51,18 @@ Remind the user to consider extra skills or MCP/connectors when these moments ar
 
 ## Wire Rolling Pipeline Into Recording Flow
 
-- Status: Ready for Review
+- Status: Done
 - Owner: Codex + BA/UX subagent
 - User outcome: During normal manual recording, the transcript area uses the local rolling WhisperKit path so fast Russian speech starts appearing as live partial text instead of waiting for VAD-final speech chunks.
-- Scope: Feed active mic PCM chunks from runtime capture into `RollingLocalTranscriptionPipeline`, prepare the real rolling WhisperKit adapter through the verified local model provider, replay early in-memory chunks captured while the model is preparing, poll rolling partials every 0.5 seconds, replace one partial segment instead of appending duplicates, resolve the best visible rolling draft on Stop, and keep fake STT out of production recording.
+- Scope: Feed active mic PCM chunks from runtime capture into `RollingLocalTranscriptionPipeline`, prepare the real rolling WhisperKit adapter through the verified local model provider, replay early in-memory chunks captured while the model is preparing, poll rolling partials every 0.5 seconds, replace one partial segment instead of appending duplicates, wait for already-created mic tap delivery tasks on Stop, run one timeout-bounded final rolling decode when audio arrived after the last live tick, resolve the best visible rolling draft as fallback, and keep fake STT out of production recording.
 - Out of scope: Smoke-only QA tail reconciliation in the app, final full re-transcription after Stop, system-audio transcription, diarization, Markdown/API/SQLite/MCP changes, raw audio persistence, cloud STT, accounts, hosted backend, and UI redesign.
 - Docs touched: `docs/architecture.md`, `docs/testing.md`, `docs/workstreams.md`.
-- Verification: `swift run Meeting007CoreChecks` passed; `swift run Meeting007WhisperKitChecks` passed; `swift build --product Meeting007App` passed with sandbox escalation for Swift/clang cache access; manual Apple Silicon Russian meeting QA pending.
-- Gates: BA/UX subagent confirmed the user outcome, no fake transcript fallback, replace-not-append partial behavior, bounded Stop behavior, and no production use of smoke-only tail reconciliation; architecture/QA subagent was unavailable due usage limit, so this branch records that process gap and keeps the implementation conservative; user acceptance pending; merge pending.
-- Subagents: BA/UX `019ecfb3-ee78-7e80-b35e-abaa2dbaca55` complete; architecture/QA `019ecfb4-48a9-72a2-b91e-236c369d3fe0` unavailable due usage limit; prior smoke-tail QA `019ecf55-dd36-76d2-b97d-4a095aec8497` explicitly limited QA tail reconciliation to smoke/manual proof only.
-- TDD/BDD evidence: Added checks that runtime audio forwards active mic PCM to the rolling live path, the rolling pipeline produces replaceable live partials and a final visible segment on Stop, and replaying early captured audio does not feed duplicate rolling windows.
-- Open decisions: Whether to start local STT before opening the microphone to reduce model-warmup delay further, whether Stop should drain a bounded queue of delayed rolling windows before finalizing, and what live Russian quality threshold is acceptable for merge to `main`.
-- Handoff notes: The app now uses rolling live STT for the main recording path when the verified model is ready. It still finalizes only the best visible rolling draft on Stop, so a separate stop-finalization/backlog-drain slice is needed before claiming robust final transcript completion for delayed meetings.
+- Verification: `swift run Meeting007CoreChecks` passed; `swift run Meeting007WhisperKitChecks` passed; `swift build --product Meeting007App` passed with sandbox escalation for Swift/clang cache access; manual Apple Silicon Russian Stop-tail QA accepted by user.
+- Gates: User acceptance first found that live rolling partials appeared but final Stop output did not pull the tail; STT subagent `019edb67-eb4b-7820-b5cc-fa2eaf96c407`, architecture subagent `019edb67-fd3c-7680-9219-bc2f3040a454`, and acceptance subagent `019edb68-0b2f-7520-a4d0-ad5607c49bf0` required a bounded Stop finalization/drain fix before merge; Developer/TDD subagent marked the fix Go for acceptance QA; user accepted the Stop-tail behavior; merge complete.
+- Subagents: BA/UX `019ecfb3-ee78-7e80-b35e-abaa2dbaca55` complete; architecture/QA `019ecfb4-48a9-72a2-b91e-236c369d3fe0` unavailable due usage limit; prior smoke-tail QA `019ecf55-dd36-76d2-b97d-4a095aec8497` explicitly limited QA tail reconciliation to smoke/manual proof only; Stop-tail STT `019edb67-eb4b-7820-b5cc-fa2eaf96c407`, architecture `019edb67-fd3c-7680-9219-bc2f3040a454`, acceptance `019edb68-0b2f-7520-a4d0-ad5607c49bf0`, and Developer/TDD `019edb69-c35d-7d13-8b70-f0731846f670` complete.
+- TDD/BDD evidence: Added checks that runtime audio forwards active mic PCM to the rolling live path, the rolling pipeline produces replaceable live partials and a final visible segment on Stop, Stop runs one final rolling decode when audio arrived after the last live tick, Stop falls back promptly to the best visible draft if that final decode times out, a non-cooperative late decode cannot publish text after Stop finalization, and replaying early captured audio does not feed duplicate rolling windows. The `AVAudioEngine` tap delivery drain has no automated harness yet because the repo does not currently simulate app-edge AVFoundation tap callback races; manual Apple Silicon Stop-tail QA covered it for acceptance.
+- Open decisions: Whether to start local STT before opening the microphone to reduce model-warmup delay further, whether a future Stop path needs multi-window queue drain beyond the current single-attempt final decode, and what live Russian quality threshold is acceptable for merge to `main`.
+- Handoff notes: The app now uses rolling live STT for the main recording path when the verified model is ready. Stop now waits for in-flight mic tap delivery tasks, asks the rolling pipeline to decode the latest buffered audio once if audio advanced after the last visible tick, and finalizes the best visible draft as fallback if the final decode times out or fails. User accepted that final words spoken immediately before Stop now appear in the final preview/Markdown without duplicated overlap.
 
 ## Streaming Partials Rolling Buffer Spike
 
@@ -221,14 +221,15 @@ Remind the user to consider extra skills or MCP/connectors when these moments ar
 - User outcome: Prevent future work from bypassing the agreed BA, UX, architecture, QA, and specialist review flow.
 - Scope: Repository rules now require relevant subagents before implementation, especially UX Designer and Acceptance/QA for UI changes; workstreams must record required subagent roles and status.
 - Scope update: code-changing work also requires Developer subagent notes and TDD/BDD evidence before ready-for-review.
+- Scope update: main-agent and subagent communication now defaults to quiet execution. Progress updates, implementation narration, and intermediate reasoning stay out of user-visible chats unless the user asks for status/reporting, a decision or permission is required, or the work is blocked.
 - Out of scope: Changing product behavior or app code.
-- Docs touched: `AGENTS.md`, `docs/process/agent-workflow.md`, `docs/workstreams.md`.
+- Docs touched: `AGENTS.md`, `docs/process/agent-workflow.md`, `docs/agents/*`, `docs/workstreams.md`.
 - Verification: Documentation-only change; repository rules reviewed locally.
 - Gates: Process update drafted; user acceptance pending; merge pending.
 - Subagents: Not required for this meta-process rule update; the purpose is to make future product work require them.
 - TDD/BDD evidence: Documentation-only process update; no app code changed.
 - Open decisions: Whether to promote the role prompts in `docs/agents/` into reusable Codex skills later.
-- Handoff notes: If future required subagent tooling is unavailable, mark the workstream blocked and ask the user before implementing.
+- Handoff notes: If future required subagent tooling is unavailable, mark the workstream blocked and ask the user before implementing. When subagents are available, every subagent handoff must carry the quiet-execution instruction and request only final gate output.
 
 ## Configurable Markdown Transcript Folder
 

@@ -50,6 +50,9 @@ struct Meeting007CoreChecks {
         await checkRollingStreamingSessionProducesPartialBeforeVADFinalChunk()
         await checkRollingStreamingSessionRejectsWrongSessionAndClearsOnStop()
         await checkRollingLocalTranscriptionPipelineProducesLivePartialAndFinalSegment()
+        await checkRollingLocalTranscriptionPipelineDecodesPendingAudioOnStop()
+        await checkRollingLocalTranscriptionPipelineStopTimeoutKeepsBestVisibleDraft()
+        await checkRollingLocalTranscriptionPipelineIgnoresLateDecodeAfterStopTimeout()
         await checkRollingLocalTranscriptionPipelineIgnoresReplayedAudioChunks()
         checkLocalAgreementStabilizerCommitsOnlyStablePrefix()
         checkRollingSeamFilterRemovesPromptEchoBeforeStabilizer()
@@ -1046,6 +1049,95 @@ struct Meeting007CoreChecks {
         require(finalVisible.count == 1, "Stop must resolve rolling live text into one clean final segment for this slice.")
         require(finalVisible.first?.state == .final, "Stop-resolved rolling segment must be final.")
         require(finalVisible.first?.text.contains("быстрая русская речь") == true, "Rolling live final segment must preserve recognized Russian text.")
+    }
+
+    private static func checkRollingLocalTranscriptionPipelineDecodesPendingAudioOnStop() async {
+        let sessionID = UUID()
+        let decoder = ScriptedRollingWindowDecoder(outputs: [
+            "начало встречи уже видно",
+            "начало встречи уже видно и финальный хвост подтянулся"
+        ])
+        let pipeline = RollingLocalTranscriptionPipeline(
+            decoder: decoder,
+            bufferDuration: 30,
+            windowDuration: 20
+        )
+
+        let start = await pipeline.start(STTSessionConfig(sessionID: sessionID))
+        require(start == .ready, "Rolling live pipeline must start before Stop finalization can drain pending audio.")
+
+        await pipeline.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0, amplitude: 0.2))
+        _ = await pipeline.tick()
+        await pipeline.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 1, amplitude: 0.2))
+
+        let finalVisible = await pipeline.stop(sessionID: sessionID)
+        let windows = await decoder.receivedWindows()
+
+        require(windows.count == 2, "Stop must run one bounded final rolling decode when audio arrived after the last live tick.")
+        require(finalVisible.count == 1, "Stop finalization must still produce one clean final rolling segment.")
+        require(finalVisible.first?.state == .final, "Stop finalization must publish the drained rolling text as final.")
+        require(finalVisible.first?.text.contains("финальный хвост подтянулся") == true, "Stop must pull the last pending rolling text into the final transcript.")
+    }
+
+    private static func checkRollingLocalTranscriptionPipelineStopTimeoutKeepsBestVisibleDraft() async {
+        let sessionID = UUID()
+        let decoder = SlowSecondRollingWindowDecoder(
+            firstOutput: "видимый черновик встречи",
+            delayedOutput: "видимый черновик встречи зависший хвост",
+            delayNanoseconds: 200_000_000
+        )
+        let pipeline = RollingLocalTranscriptionPipeline(
+            decoder: decoder,
+            bufferDuration: 30,
+            windowDuration: 20,
+            stopFinalDecodeTimeout: 0.01
+        )
+
+        let start = await pipeline.start(STTSessionConfig(sessionID: sessionID))
+        require(start == .ready, "Rolling live pipeline must start before Stop timeout behavior can be tested.")
+
+        await pipeline.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0, amplitude: 0.2))
+        _ = await pipeline.tick()
+        await pipeline.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 1, amplitude: 0.2))
+
+        let stopStartedAt = Date()
+        let finalVisible = await pipeline.stop(sessionID: sessionID)
+        let stopDuration = Date().timeIntervalSince(stopStartedAt)
+
+        require(stopDuration < 0.15, "Stop final decode timeout must fall back promptly instead of waiting for a stuck decoder.")
+        require(finalVisible.count == 1, "Stop timeout must still return the best available rolling transcript.")
+        require(finalVisible.first?.state == .final, "Stop timeout fallback must publish the best visible draft as final.")
+        require(finalVisible.first?.text == "видимый черновик встречи", "Stop timeout must preserve the best visible draft instead of empty or fake text.")
+    }
+
+    private static func checkRollingLocalTranscriptionPipelineIgnoresLateDecodeAfterStopTimeout() async {
+        let sessionID = UUID()
+        let decoder = NonCooperativeSlowSecondRollingWindowDecoder(
+            firstOutput: "видимый черновик встречи",
+            delayedOutput: "поздний хвост не должен попасть после стопа",
+            delayNanoseconds: 80_000_000
+        )
+        let pipeline = RollingLocalTranscriptionPipeline(
+            decoder: decoder,
+            bufferDuration: 30,
+            windowDuration: 20,
+            stopFinalDecodeTimeout: 0.01
+        )
+
+        let start = await pipeline.start(STTSessionConfig(sessionID: sessionID))
+        require(start == .ready, "Rolling live pipeline must start before late timeout behavior can be tested.")
+
+        await pipeline.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0, amplitude: 0.2))
+        _ = await pipeline.tick()
+        await pipeline.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 1, amplitude: 0.2))
+
+        let finalVisible = await pipeline.stop(sessionID: sessionID)
+        try? await Task.sleep(nanoseconds: 150_000_000)
+        let lateVisible = await pipeline.visibleSegments()
+
+        require(finalVisible.first?.text == "видимый черновик встречи", "Stop timeout must first finalize the best visible draft.")
+        require(lateVisible.first?.text == "видимый черновик встречи", "A non-cooperative late final decode must not publish text after Stop finalization.")
+        require(lateVisible.first?.text.contains("поздний хвост") != true, "Timed-out decode output must not mutate visible transcript after Stop.")
     }
 
     private static func checkRollingLocalTranscriptionPipelineIgnoresReplayedAudioChunks() async {
@@ -2593,6 +2685,58 @@ private actor ScriptedRollingWindowDecoder: RollingWindowTranscribing {
 
     func receivedPrompts() -> [String] {
         prompts
+    }
+}
+
+private actor SlowSecondRollingWindowDecoder: RollingWindowTranscribing {
+    private let firstOutput: String
+    private let delayedOutput: String
+    private let delayNanoseconds: UInt64
+    private var callCount = 0
+
+    init(firstOutput: String, delayedOutput: String, delayNanoseconds: UInt64) {
+        self.firstOutput = firstOutput
+        self.delayedOutput = delayedOutput
+        self.delayNanoseconds = delayNanoseconds
+    }
+
+    func transcribe(window: RollingAudioWindow, prompt: String) async throws -> RollingTranscriptionHypothesis {
+        callCount += 1
+        if callCount > 1 {
+            try await Task.sleep(nanoseconds: delayNanoseconds)
+        }
+
+        return RollingTranscriptionHypothesis(
+            text: callCount == 1 ? firstOutput : delayedOutput,
+            windowStartedAt: window.startedAt,
+            windowEndedAt: window.startedAt + window.duration
+        )
+    }
+}
+
+private actor NonCooperativeSlowSecondRollingWindowDecoder: RollingWindowTranscribing {
+    private let firstOutput: String
+    private let delayedOutput: String
+    private let delayNanoseconds: UInt64
+    private var callCount = 0
+
+    init(firstOutput: String, delayedOutput: String, delayNanoseconds: UInt64) {
+        self.firstOutput = firstOutput
+        self.delayedOutput = delayedOutput
+        self.delayNanoseconds = delayNanoseconds
+    }
+
+    func transcribe(window: RollingAudioWindow, prompt: String) async throws -> RollingTranscriptionHypothesis {
+        callCount += 1
+        if callCount > 1 {
+            try? await Task.sleep(nanoseconds: delayNanoseconds)
+        }
+
+        return RollingTranscriptionHypothesis(
+            text: callCount == 1 ? firstOutput : delayedOutput,
+            windowStartedAt: window.startedAt,
+            windowEndedAt: window.startedAt + window.duration
+        )
     }
 }
 

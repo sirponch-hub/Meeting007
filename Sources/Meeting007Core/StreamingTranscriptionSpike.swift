@@ -487,6 +487,12 @@ public struct RollingWindowHypothesisSeamFilter: Sendable {
 }
 
 public actor RollingStreamingTranscriptionSession {
+    public enum FinalDecodeResult: Equatable, Sendable {
+        case decoded
+        case skippedNoNewAudio
+        case timedOut
+    }
+
     private let sessionID: UUID
     private let lane: CaptureLane
     private let windowDuration: TimeInterval
@@ -496,6 +502,8 @@ public actor RollingStreamingTranscriptionSession {
     private var seamFilter = RollingWindowHypothesisSeamFilter()
     private var lastUpdate = StreamingTranscriptUpdate(committedText: "", partialText: "")
     private var bestVisibleDraft = ""
+    private var latestReceivedAudioEndTime: TimeInterval = 0
+    private var latestDecodedAudioEndTime: TimeInterval = 0
 
     public init(
         sessionID: UUID,
@@ -516,6 +524,7 @@ public actor RollingStreamingTranscriptionSession {
             return
         }
         buffer.append(chunk)
+        latestReceivedAudioEndTime = max(latestReceivedAudioEndTime, chunk.startedAt + chunk.duration)
     }
 
     public func tick() async throws -> StreamingTranscriptUpdate {
@@ -527,8 +536,73 @@ public actor RollingStreamingTranscriptionSession {
         let hypothesis = try await decoder.transcribe(window: window, prompt: committedPrompt)
         let filteredHypothesis = seamFilter.filter(hypothesis.text, committedPrompt: committedPrompt)
         lastUpdate = stabilizer.observe(filteredHypothesis)
+        latestDecodedAudioEndTime = max(latestDecodedAudioEndTime, window.startedAt + window.duration)
         rememberVisibleDraft(lastUpdate)
         return lastUpdate
+    }
+
+    @discardableResult
+    public func tickIfAudioAdvanced() async throws -> StreamingTranscriptUpdate {
+        guard latestReceivedAudioEndTime > latestDecodedAudioEndTime + 0.001 else {
+            return lastUpdate
+        }
+        return try await tick()
+    }
+
+    @discardableResult
+    public func tickIfAudioAdvanced(timeoutNanoseconds: UInt64) async throws -> FinalDecodeResult {
+        guard latestReceivedAudioEndTime > latestDecodedAudioEndTime + 0.001 else {
+            return .skippedNoNewAudio
+        }
+
+        guard let window = buffer.recentWindow(sessionID: sessionID, lane: lane, duration: windowDuration) else {
+            return .skippedNoNewAudio
+        }
+
+        let committedPrompt = stabilizer.committedPrompt()
+        let decodeTask = Task {
+            try await decoder.transcribe(window: window, prompt: committedPrompt)
+        }
+
+        enum DecodeRaceResult: Sendable {
+            case decoded(RollingTranscriptionHypothesis)
+            case failed(any Error)
+            case timedOut
+        }
+
+        let raceResult = await withTaskGroup(of: DecodeRaceResult.self, returning: DecodeRaceResult.self) { group in
+            group.addTask {
+                do {
+                    return .decoded(try await decodeTask.value)
+                } catch {
+                    return .failed(error)
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+                return .timedOut
+            }
+
+            let firstResult = await group.next() ?? .timedOut
+            if case .timedOut = firstResult {
+                decodeTask.cancel()
+            }
+            group.cancelAll()
+            return firstResult
+        }
+
+        switch raceResult {
+        case let .decoded(hypothesis):
+            let filteredHypothesis = seamFilter.filter(hypothesis.text, committedPrompt: committedPrompt)
+            lastUpdate = stabilizer.observe(filteredHypothesis)
+            latestDecodedAudioEndTime = max(latestDecodedAudioEndTime, window.startedAt + window.duration)
+            rememberVisibleDraft(lastUpdate)
+            return .decoded
+        case let .failed(error):
+            throw error
+        case .timedOut:
+            return .timedOut
+        }
     }
 
     public func finalizeBestEffortDraft() -> StreamingTranscriptUpdate {
@@ -546,6 +620,8 @@ public actor RollingStreamingTranscriptionSession {
         seamFilter.reset()
         lastUpdate = StreamingTranscriptUpdate(committedText: "", partialText: "")
         bestVisibleDraft = ""
+        latestReceivedAudioEndTime = 0
+        latestDecodedAudioEndTime = 0
     }
 
     private func rememberVisibleDraft(_ update: StreamingTranscriptUpdate) {
@@ -561,6 +637,7 @@ public actor RollingLocalTranscriptionPipeline: AudioChunkConsumer {
     private let lifecycle: (any RollingTranscriptionLifecycle)?
     private let bufferDuration: TimeInterval
     private let windowDuration: TimeInterval
+    private let stopFinalDecodeTimeoutNanoseconds: UInt64
     private var activeConfig: STTSessionConfig?
     private var session: RollingStreamingTranscriptionSession?
     private var committedSegmentID = UUID()
@@ -574,12 +651,14 @@ public actor RollingLocalTranscriptionPipeline: AudioChunkConsumer {
         decoder: any RollingWindowTranscribing,
         lifecycle: (any RollingTranscriptionLifecycle)? = nil,
         bufferDuration: TimeInterval = 30,
-        windowDuration: TimeInterval = 20
+        windowDuration: TimeInterval = 20,
+        stopFinalDecodeTimeout: TimeInterval = 5
     ) {
         self.decoder = decoder
         self.lifecycle = lifecycle
         self.bufferDuration = bufferDuration
         self.windowDuration = windowDuration
+        self.stopFinalDecodeTimeoutNanoseconds = UInt64(max(0, stopFinalDecodeTimeout) * 1_000_000_000)
     }
 
     public func start(_ config: STTSessionConfig) async -> TranscriptionStartResult {
@@ -654,7 +733,17 @@ public actor RollingLocalTranscriptionPipeline: AudioChunkConsumer {
         }
 
         if let config = activeConfig,
-           let finalUpdate = await session?.finalizeBestEffortDraft() {
+           let session {
+            do {
+                _ = try await session.tickIfAudioAdvanced(timeoutNanoseconds: stopFinalDecodeTimeoutNanoseconds)
+            } catch {
+                runtimeFailure = TranscriptionFailure(
+                    code: "local_stt_runtime_failed",
+                    message: "Local rolling transcription stopped unexpectedly."
+                )
+            }
+
+            let finalUpdate = await session.finalizeBestEffortDraft()
             apply(finalUpdate, config: config, stateForCommitted: .final)
             partialSegment = nil
         }
