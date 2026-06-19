@@ -36,15 +36,27 @@ V1 must make audio retention explicit before implementation:
 
 - Option A: keep local audio for correction/debug until user deletes it.
 - Option B: delete raw audio after transcript finalization.
+- Product update: temporary local audio spooling for loss-resistant transcription finalization is allowed as a separate P0 pipeline requirement, but only until successful final transcript completion. See [ADR 0002](adr/0002-temporary-local-audio-spool.md).
 
-The default must be chosen by product decision before raw audio persistence ships. Until then, implementation should avoid persistent raw audio by default.
+ADR 0002 chooses temporary raw-audio retention only for loss-resistant local finalization. Permanent audio retention remains disallowed by default.
 
-Current microphone capture slice:
+Temporary finalization spool policy:
+
+- The spool exists only to prevent transcript loss when live STT starts late, fails, or finalization needs to recover the captured tail.
+- The spool must stay local on the Mac and must not contact remote services.
+- The spool must not be exposed through Markdown, SQLite transcript records, REST, MCP, logs, telemetry, debug transcript dumps, or user-facing transcript export.
+- The spool should be deleted automatically after successful final transcript completion.
+- If finalization fails or times out, the spool may be retained only to support a local retry/recovery state and must be deleted after recovery or explicit user discard.
+- The implemented spool lives under app-owned `Application Support/Meeting007/CaptureSpool`, is excluded from backup, uses `0700` session directories and `0600` files, and exposes no paths through its public metadata models.
+- The spool remains after capture close. It is deleted only after complete-spool finalization succeeds and Markdown is written locally. Decode/finalization/Markdown failure preserves it; orphan recovery/discard UX remains required follow-up work.
+- Non-empty captured audio that produces no final transcript text is treated as incomplete finalization and is never a cleanup success.
+
+Current microphone capture and spool slice:
 
 - Microphone capture starts only after the user presses Start.
 - The app requests macOS microphone access only when recording is requested.
-- Captured audio stays in process memory as normalized 16 kHz mono Float PCM runtime chunks.
-- Runtime chunks are cleared on Stop and are not written to Markdown, SQLite, logs, REST, MCP, telemetry, cloud storage, or raw audio files.
+- Captured audio is normalized to 16 kHz mono Float PCM and written locally to the temporary capture spool before live STT fanout.
+- Runtime chunks are cleared on Stop. Temporary spool audio is not written to Markdown, SQLite, logs, REST, MCP, telemetry, or cloud storage.
 - VAD emits only in-memory speech windows (`SpeechChunk`) into the local STT boundary and flushes an active speech window on Stop.
 - The visible transcript is now fed through the local STT pipeline boundary. The current deterministic Russian transcriber is runtime-only and does not write raw audio, model files, transcript debug dumps, or network payloads.
 

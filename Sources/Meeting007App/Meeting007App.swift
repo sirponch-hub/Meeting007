@@ -54,6 +54,7 @@ final class RecordingShellViewModel: ObservableObject {
     private let transcriptPreviewController: LiveTranscriptPreviewController
     private let rollingTranscriptionPipeline: RollingLocalTranscriptionPipeline
     private let runtimeAudioConsumer: RuntimeOnlyAudioChunkConsumer
+    private let lossResistantCaptureSession: LossResistantCaptureSession
     private let recordingStore: any RecordingSessionStore
     private let clipboardWriter: any ClipboardWriting
     private let transcriptFolderSettings: MarkdownTranscriptFolderSettings
@@ -89,13 +90,18 @@ final class RecordingShellViewModel: ObservableObject {
             modelPathProvider: defaultModelStore
         )
         let effectiveRuntimeAudioConsumer = RuntimeOnlyAudioChunkConsumer(liveAudioConsumer: effectiveRollingPipeline)
+        let lossResistantCaptureSession = LossResistantCaptureSession(
+            liveConsumer: effectiveRuntimeAudioConsumer
+        )
+        self.lossResistantCaptureSession = lossResistantCaptureSession
         self.controller = controller ?? RecordingSessionController(
             captureDriver: MicrophoneRecordingCaptureDriver(
                 microphone: AVAudioEngineMicrophoneCaptureDriver(
                     statusModel: microphoneStatusModel,
                     deviceSettings: microphoneDeviceSettings
                 ),
-                consumer: effectiveRuntimeAudioConsumer
+                consumer: effectiveRuntimeAudioConsumer,
+                lossResistantSession: lossResistantCaptureSession
             )
         )
         self.transcriptPreviewController = transcriptPreviewController
@@ -202,8 +208,8 @@ final class RecordingShellViewModel: ObservableObject {
             apply(nextState)
 
             if nextState.isRecording {
-                await startLocalTranscription()
                 startTimer()
+                await startLocalTranscription()
             }
         }
     }
@@ -215,26 +221,44 @@ final class RecordingShellViewModel: ObservableObject {
         state = .stopping
         transcriptionStatusText = "Finalizing local transcript..."
         stopTimer()
+        stopTranscriptPreviewTimer()
 
         Task {
             let currentSessionID = await controller.currentSession()?.id
             let nextState = await controller.stopManualRecording()
             let frozenSegments: [TranscriptSegment]
+            var finalizedCompleteAudio = false
             if let currentSessionID {
-                previewSegments = await rollingTranscriptionPipeline.visibleSegments()
-                frozenSegments = await rollingTranscriptionPipeline.stop(sessionID: currentSessionID)
+                let finalizationSpool = await lossResistantCaptureSession.finalizationSpool()
+                let stopResult = await rollingTranscriptionPipeline.stop(
+                    sessionID: currentSessionID,
+                    finalizationSpool: finalizationSpool
+                )
+                frozenSegments = stopResult.segments
+                finalizedCompleteAudio = stopResult.finalizedCompleteAudio
             } else {
                 frozenSegments = previewSegments
             }
             await transcriptPreviewController.stop()
             previewSegments = frozenSegments
-            stopTranscriptPreviewTimer()
             apply(nextState)
             if nextState == .stopped {
                 microphoneStatusModel.update(.idle)
-                transcriptionStatusText = "Local transcript finalized"
+                transcriptionStatusText = finalizedCompleteAudio
+                    ? "Local transcript finalized"
+                    : "Audio saved locally; transcription incomplete"
+                if finalizedCompleteAudio {
+                    errorMessage = nil
+                } else if let failure = await rollingTranscriptionPipeline.lastFailure() {
+                    errorMessage = failure.message
+                }
             }
-            await saveCompletedSessionIfNeeded(state: nextState, segments: frozenSegments)
+            let persistedToMarkdown = await saveCompletedSessionIfNeeded(state: nextState, segments: frozenSegments)
+            if let currentSessionID,
+               finalizedCompleteAudio,
+               persistedToMarkdown {
+                try? await lossResistantCaptureSession.cleanup(sessionID: currentSessionID)
+            }
         }
     }
 
@@ -329,6 +353,7 @@ final class RecordingShellViewModel: ObservableObject {
     func refreshTranscriptionModelAvailability() async {
         transcriptionModelAvailability = await modelManager.availability(for: .defaultRussian)
         transcriptionModelInstallState = await modelInstaller.state()
+        await prewarmLocalTranscriptionIfReady()
     }
 
     func prepareTranscriptionModelInstall() {
@@ -535,8 +560,23 @@ final class RecordingShellViewModel: ObservableObject {
                 if let failure = await self.rollingTranscriptionPipeline.lastFailure() {
                     self.transcriptionStatusText = "Recording audio locally; transcription unavailable"
                     self.errorMessage = failure.message
+                } else if self.transcriptionStatusText == "Recording audio locally; transcription unavailable" {
+                    self.transcriptionStatusText = "Transcribing locally"
+                    self.errorMessage = nil
                 }
             }
+        }
+    }
+
+    private func prewarmLocalTranscriptionIfReady() async {
+        guard transcriptionModelAvailability == .ready,
+              !state.isRecording else {
+            return
+        }
+
+        let result = await rollingTranscriptionPipeline.prewarm()
+        if case let .unavailable(failure) = result {
+            errorMessage = failure.message
         }
     }
 
@@ -545,10 +585,10 @@ final class RecordingShellViewModel: ObservableObject {
         transcriptPreviewTimer = nil
     }
 
-    private func saveCompletedSessionIfNeeded(state: RecordingState, segments: [TranscriptSegment]) async {
+    private func saveCompletedSessionIfNeeded(state: RecordingState, segments: [TranscriptSegment]) async -> Bool {
         guard state == .stopped,
               let session = await controller.currentSession() else {
-            return
+            return false
         }
 
         let transcript = MeetingTranscript(meetingID: session.id, segments: segments)
@@ -557,13 +597,14 @@ final class RecordingShellViewModel: ObservableObject {
             transcript: transcript,
             note: quickNote
         ) else {
-            return
+            return false
         }
 
         let exportedSession = await exportMarkdownIfPossible(for: completedSession)
         await recordingStore.save(exportedSession)
         recentSessions = await recordingStore.recentSessions(limit: 8)
         meetingTitle = exportedSession.title
+        return exportedSession.markdownFileURL != nil
     }
 
     private func exportMarkdownIfPossible(for completedSession: CompletedRecordingSession) async -> CompletedRecordingSession {
@@ -737,6 +778,7 @@ final class AVAudioEngineMicrophoneCaptureDriver: MicrophoneCaptureDriver, @unch
     private var activeSessionID: UUID?
     private var emittedSampleCount = 0
     private var deliveryTasks: [UUID: Task<Void, Never>] = [:]
+    private var deliveryTail: Task<Void, Never>?
     private var registeringDeliveryTaskCount = 0
     private var isStoppingDelivery = false
 
@@ -775,8 +817,10 @@ final class AVAudioEngineMicrophoneCaptureDriver: MicrophoneCaptureDriver, @unch
         stateLock.withLock {
             emittedSampleCount = 0
             deliveryTasks.removeAll()
+            deliveryTail = nil
             registeringDeliveryTaskCount = 0
             isStoppingDelivery = false
+            activeSessionID = session.id
         }
         inputNode.installTap(onBus: 0, bufferSize: 1_024, format: format) { [weak self] buffer, _ in
             guard let self else {
@@ -805,7 +849,9 @@ final class AVAudioEngineMicrophoneCaptureDriver: MicrophoneCaptureDriver, @unch
             let deliveryTaskID = UUID()
             var deliveryTask: Task<Void, Never>!
             self.stateLock.withLock {
+                let previousDelivery = self.deliveryTail
                 deliveryTask = Task {
+                    await previousDelivery?.value
                     await consumer.receive(CapturedAudioChunk(
                         sessionID: session.id,
                         lane: .mic,
@@ -822,6 +868,7 @@ final class AVAudioEngineMicrophoneCaptureDriver: MicrophoneCaptureDriver, @unch
                     }
                 }
                 self.deliveryTasks[deliveryTaskID] = deliveryTask
+                self.deliveryTail = deliveryTask
                 self.registeringDeliveryTaskCount -= 1
             }
         }
@@ -830,11 +877,13 @@ final class AVAudioEngineMicrophoneCaptureDriver: MicrophoneCaptureDriver, @unch
             try nextEngine.start()
             stateLock.withLock {
                 engine = nextEngine
-                activeSessionID = session.id
             }
         } catch {
             inputNode.removeTap(onBus: 0)
             nextEngine.stop()
+            stateLock.withLock {
+                activeSessionID = nil
+            }
             await drainDeliveryTasks()
             await updateStatus(.failed("Microphone capture stopped unexpectedly. Your current transcript is still local."))
             throw RecordingFailure(
@@ -884,6 +933,7 @@ final class AVAudioEngineMicrophoneCaptureDriver: MicrophoneCaptureDriver, @unch
             }
             if isDrained {
                 stateLock.withLock {
+                    deliveryTail = nil
                     isStoppingDelivery = false
                 }
                 return

@@ -4,6 +4,10 @@
 
 Make Meeting007 reliably capture microphone and system audio on Apple Silicon without a meeting bot.
 
+## Communication Constraint
+
+Work quietly. Do not post progress updates, implementation narration, or intermediate reasoning unless user input, permission, or a blocker must be surfaced. Return only the final gate output required by this role.
+
 ## Responsibilities
 
 - Own ScreenCaptureKit, microphone capture, audio session coordination, permissions, and capture reliability.
@@ -23,4 +27,3 @@ Make Meeting007 reliably capture microphone and system audio on Apple Silicon wi
 ## Gate
 
 Audio-related work is not ready for development or merge unless capture permissions, failure states, manual QA, and local-only constraints are documented.
-

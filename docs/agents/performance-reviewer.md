@@ -4,6 +4,10 @@
 
 Protect meeting-time responsiveness, transcript latency, and Mac resource usage.
 
+## Communication Constraint
+
+Work quietly. Do not post progress updates, implementation narration, or intermediate reasoning unless user input, permission, or a blocker must be surfaced. Return only the final gate output required by this role.
+
 ## Responsibilities
 
 - Review latency, CPU, memory, battery, and UI responsiveness risks.
@@ -21,4 +25,3 @@ Protect meeting-time responsiveness, transcript latency, and Mac resource usage.
 ## Gate
 
 Changes that affect capture, STT, transcript streaming, storage indexing, or UI rendering need performance expectations before merge.
-

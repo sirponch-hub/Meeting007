@@ -42,13 +42,25 @@ The app should avoid mixing these lanes before transcription unless a fallback p
 Current implemented microphone boundary:
 
 - `RecordingCaptureDriver` remains the Start/Stop lifecycle boundary used by the app.
-- `MicrophoneRecordingCaptureDriver` composes a microphone driver with a runtime-only audio chunk consumer.
+- `MicrophoneRecordingCaptureDriver` composes a microphone driver with a capture-session consumer.
 - `CapturedAudioChunk` carries meeting ID, lane, sample-clock timing, byte count, normalized sample format, and in-memory Float PCM samples.
 - `RuntimeAudioFrameNormalizer` downmixes microphone input to mono and resamples it to 16 kHz for the VAD/STT path.
 - `RuntimeOnlyAudioChunkConsumer` accepts sample-bearing chunks only while the session is active, forwards active mic PCM to the rolling live transcription path, feeds VAD for legacy speech-chunk consumers, drains queued speech delivery on Stop, and clears PCM buffers on Stop.
 - `VADSpeechChunker` turns speech-positive PCM frames into bounded `SpeechChunk` utterances and flushes active speech on Stop so the last spoken words are not dropped.
-- `AVAudioEngineMicrophoneCaptureDriver` lives in the macOS app edge, requests microphone access on Start, starts `AVAudioEngine`, emits in-memory sample-bearing mic chunks, derives timestamps from emitted sample count, and updates the UI with a compact mic lane status.
-- The first mic slice does not persist raw audio and does not add system audio capture.
+- `AVAudioEngineMicrophoneCaptureDriver` lives in the macOS app edge, requests microphone access on Start, starts `AVAudioEngine`, emits ordered in-memory sample-bearing mic chunks through one delivery tail, derives timestamps from emitted sample count, and updates the UI with a compact mic lane status.
+- `LossResistantCaptureSession` writes each accepted chunk to the local spool before enqueueing it for the live runtime consumer. Closing it drains capture writes and closes the spool without waiting for live STT shutdown.
+- `LocalCaptureSessionSpool` stores per-lane append-only Float PCM and ordered JSONL metadata under app-owned Application Support. Closed sessions remain readable until explicit cleanup.
+- `CaptureLatencyMarkers` records only local in-memory lifecycle event, session ID, and monotonic timestamp values.
+- System audio capture is not part of the current slice; the spool metadata and lane files already preserve the lane boundary.
+
+Implemented loss-resistant capture foundation:
+
+- `RecordingCaptureDriver` remains the user-facing Start/Stop boundary; Start creates the local capture session before microphone delivery begins.
+- The local capture session spool is the durable source of truth for captured transcription input during an active meeting.
+- Each audio chunk in the spool must carry meeting ID, lane, sequence number, sample-start, sample-end, sample rate, channel count, byte count, and local capture timing.
+- The spool may retain raw audio only as temporary local data needed to prevent transcript loss before finalization, following [ADR 0002](adr/0002-temporary-local-audio-spool.md).
+- The spool must not be exposed through Markdown, SQLite transcript records, REST, MCP, logs, telemetry, or cloud services.
+- Successful final transcript completion deletes the temporary spool only after Markdown is written locally. Finalization, Markdown, or model failure preserves the closed spool for recovery.
 
 ## Transcription Pipeline
 
@@ -60,6 +72,17 @@ The STT engine is behind a protocol boundary:
 - Default execution: local Apple Silicon acceleration through a Whisper-family runtime.
 
 The chunker uses VAD to cut speech at natural boundaries. Partial segments may update. Final segments are immutable except for explicit correction/finalization passes.
+
+Target transcription architecture:
+
+- Live transcription and final transcript reconciliation are separate local workers.
+- The live worker consumes ordered frames from the capture session spool or a low-latency frame stream and emits draft `partial` segments quickly.
+- The finalizer streams the complete closed local spool in bounded non-overlapping audio windows after Stop and emits final segments keyed by audio offsets. It does not load the whole meeting into memory or derive final text from rolling partial strings.
+- Stop must stop capture promptly and must not block indefinitely on the finalizer.
+- Segment reconciliation must use lane and sample offsets rather than UI string-prefix matching.
+- A single heavy rolling Whisper decode must not be responsible for live draft text, stable committed text, and final transcript quality at the same time.
+- If the finalizer fails or exceeds its deadline, the app must preserve the local spool and show a recoverable finalization state instead of losing captured speech.
+- Development/QA instrumentation should record local-only latency markers for Start, first audio frame, live worker readiness, first partial, Stop, capture stopped, finalization start, and finalization completion/failure.
 
 Current implemented STT boundary:
 
@@ -74,9 +97,11 @@ Current implemented STT boundary:
 - `Meeting007WhisperKit` is an isolated adapter target that depends on the upstream `argmax-oss-swift` Swift package product `WhisperKit` while keeping `Meeting007Core` dependency-light and fast to test.
 - `WhisperKitSpeechTranscriber` compiles behind the same `SpeechTranscribing` protocol and accepts `SpeechChunk` input only; it does not know about `AVAudioEngine`, VAD internals, Markdown, SQLite, REST, or MCP.
 - The WhisperKit adapter defaults to Russian, requires model readiness before transcribing, and deliberately does not initiate automatic model download.
-- The app production composition now uses `WhisperKitTranscriptionPipelineFactory.makeProductionRollingPipeline` with `LocalSTTModelStore` as the verified model path provider. Active recording feeds normalized mic PCM into `RollingLocalTranscriptionPipeline`, polls it for live rolling partials, and replaces the same partial segment instead of appending duplicates.
-- When a recording starts, microphone capture may begin before the local model finishes preparing. After the rolling pipeline reports ready, the app replays already captured in-memory runtime chunks into the rolling buffer so the first seconds of speech are less likely to be lost. The rolling pipeline rejects already accepted chunks by sample-clock end time to keep replay from creating duplicate live text.
-- `RollingLocalTranscriptionPipeline` owns the active rolling session lifecycle, prepares the WhisperKit rolling adapter when available, keeps one committed segment plus one replaceable partial segment for the UI, runs one timeout-bounded final rolling decode on Stop when buffered audio advanced after the last live tick, and falls back to the best visible rolling draft if the final decode cannot improve it or times out. It does not use the smoke-only QA tail reconciler.
+- The app production composition uses `WhisperKitTranscriptionPipelineFactory.makeProductionRollingPipeline` with `LocalSTTModelStore` as the verified model path provider. Active recording feeds normalized mic PCM into a single-flight rolling preview worker. Timer signals are coalesced, decode runs only after audio advances, and the UI exposes one stable-ID partial row instead of simultaneous stale final and partial rows.
+- When the verified Russian model is ready, the app asks the rolling pipeline to prewarm the local WhisperKit runtime after readiness refresh or successful model installation. Prewarm verifies the same local model directory, creates no microphone session, starts no recording, performs no automatic download, and uses only local model files.
+- When a recording starts, microphone capture begins before local STT readiness is required. After the rolling pipeline reports ready, the app replays already captured in-memory runtime chunks into the rolling buffer so the first seconds of speech are less likely to be lost. The rolling pipeline rejects already accepted chunks by sample-clock end time to keep replay from creating duplicate live text.
+- `RollingLocalTranscriptionPipeline` owns the active preview lifecycle, serializes decode calls, coalesces ticks, ignores duplicate replay chunks, and clears a transient current failure after a successful retry. On Stop, `SpoolTranscriptFinalizer` sequentially decodes the complete recovered spool into non-overlapping offset-based final segments. The rolling preview is only a fallback when full-spool finalization fails.
+- The production rolling WhisperKit adapter keeps the prepared local engine warm across normal recording Stop so the next Start avoids rebuilding the runtime. Explicit warm-engine release remains a future idle-time/memory-pressure policy; normal Stop still clears Meeting007 rolling session state and runtime PCM buffers.
 - Runtime WhisperKit load/decode errors are exposed through the STT pipeline failure state so the app can switch from `Transcribing locally` to a recoverable unavailable status instead of silently showing an empty transcript.
 - `LocalSTTModelInstaller` owns explicit-consent install lifecycle separately from transcription: pending consent, progress, verification, ready, cancellation, and failure.
 - `LocalSTTModelStore` checks the app-owned model folder under Application Support and exposes readiness through `LocalSTTModelManaging`; model files are never stored in the Markdown transcript folder.
@@ -84,7 +109,7 @@ Current implemented STT boundary:
 - `install.json` is written only after successful verification and records policy ID, language, repository, revision, folder, actual bytes, file count, per-file sizes, per-file SHA-256, `source: explicit-user-consent`, and `status: installed`.
 - The verified model folder must include WhisperKit tokenizer runtime files (`tokenizer.json` and `tokenizer_config.json`) in addition to the CoreML model bundles. CoreML-only installs are not ready because WhisperKit cannot decode text without the tokenizer.
 - Existing installs are considered ready only when `install.json` matches the current Russian policy and all recorded files still exist with matching sizes and SHA-256 values. A folder without a valid marker, tokenizer files, or with corrupted files is not ready and does not trigger automatic repair.
-- The app Settings surface shows Russian model status and starts install only after a confirmation sheet. Real WhisperKit rolling transcription is wired into the app recording flow when the verified model directory is available; final-pass cleanup beyond the current single Stop-time rolling decode, system-audio transcription, and latency tuning remain future slices.
+- The app Settings surface shows Russian model status and starts install only after a confirmation sheet. Real WhisperKit rolling transcription remains a transitional live preview; the full-spool finalizer is the authoritative Stop result. System-audio transcription, a dedicated final model, recovery UI, and latency tuning remain future slices.
 
 ## Storage
 

@@ -12,6 +12,8 @@ Codex must use the specialized subagents for repository work instead of self-app
 
 Required behavior:
 
+- Run quietly by default. Main-agent and subagent chats must not contain progress updates, implementation narration, or intermediate reasoning unless the user explicitly asks for status/reporting, a decision or permission is required, or the work is blocked.
+- Every subagent prompt or handoff must include the quiet-execution rule, and subagents should return only their final gate output: recommendation, acceptance status, risks, required tests, documentation updates, and handoff notes.
 - Before implementation, spawn or message the relevant role subagents for the workstream.
 - Do not start coding until BA requirements, UX impact when relevant, architecture impact, and acceptance scenarios are available.
 - Code-changing work always requires a Developer subagent in addition to BA/UX/Architecture/QA gates.

@@ -4,6 +4,10 @@
 
 Deliver fast, local, Russian-first transcription quality on Apple Silicon.
 
+## Communication Constraint
+
+Work quietly. Do not post progress updates, implementation narration, or intermediate reasoning unless user input, permission, or a blocker must be surfaced. Return only the final gate output required by this role.
+
 ## Responsibilities
 
 - Evaluate local STT runtime/model options for Russian accuracy, latency, and resource use.
@@ -23,4 +27,3 @@ Deliver fast, local, Russian-first transcription quality on Apple Silicon.
 ## Gate
 
 STT-related work is not ready for `main` unless Russian-first local behavior, latency target, offline behavior, and benchmark/test expectations are documented.
-

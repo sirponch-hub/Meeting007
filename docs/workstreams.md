@@ -49,6 +49,36 @@ Remind the user to consider extra skills or MCP/connectors when these moments ar
 
 ## Current Workstreams
 
+## Loss-Resistant Local ASR Pipeline
+
+- Status: Accepted — dogfood concurrency and full-spool finalization fix verified; merge pending
+- Owner: Codex + required BA/UX/Architecture/Audio/STT/Privacy/QA/Developer agents before implementation
+- User outcome: Recording starts immediately, live Russian transcript appears quickly, Stop never hangs on transcription, and captured speech is not lost even when local STT starts late or fails mid-meeting.
+- Scope: Replace the current single rolling-decode production direction with a capture-first local ASR pipeline: ordered capture session spool, local-only temporary raw audio retention until finalization, latency markers, push-driven live transcription worker, separate finalizer, recoverable finalization state, and sample-offset-based segment state transitions.
+- Out of scope: Cloud transcription, hosted storage, account sync, permanent raw audio retention, exposing audio through REST/MCP/Markdown/logs, calendar automation, UI redesign beyond required finalization/recovery states, and model marketplace changes.
+- Docs touched: `docs/product/BRD.md`, `docs/product/prioritized-backlog.md`, `docs/architecture.md`, `docs/security-privacy.md`, `docs/adr/0002-temporary-local-audio-spool.md`, `docs/workstreams.md`.
+- Verification: `Meeting007CoreChecks` passed; `Meeting007WhisperKitChecks` passed; `Meeting007App` built successfully with workspace-local module caches. Manual Russian Apple Silicon acceptance is still required.
+- Gates: Initial spool gates remain accepted. After dogfood reported unexpected rolling failure, lost beginning/end, and stale partial UI, BA+UX, architecture/STT/performance/privacy, QA, and Developer/TDD gates required single-flight decode plus authoritative full-spool finalization. That implementation boundary was followed; rolling string heuristics were not changed. User accepted the corrected dogfood behavior on 2026-06-19; merge remains pending because the branch contains earlier unrelated worktree changes that require deliberate staging.
+- Subagents: Dogfood follow-up BA+UX `019edea0-4912-74c0-ae4c-031a7ef7fa8b`; architecture/STT/performance/privacy `019edea0-4a30-70a0-87b6-3c302ce4e44d`; Acceptance/QA `019edea0-4997-7e43-b349-4f07eb18e0e6`; Developer/TDD `019edea3-1f60-75f0-a36a-366368d68992`.
+- TDD/BDD evidence: Existing spool/privacy checks remain. Added deterministic checks for one active decode, coalesced timer pressure, no decode without new audio, transient failure recovery, one stable-ID replacing partial, Stop during blocked live decode, production `LocalCaptureSessionSpool` streaming through full finalization, full sample coverage beyond 30 seconds, first/last offset final segments, closed-spool retention after finalization failure, and adapter-level WhisperKit serialization.
+- Open decisions: At-rest encryption beyond POSIX permissions; finalization timeout; live model/path versus final model/path; acceptable first-partial latency target on real Apple Silicon; automatic versus user-triggered recovery; orphan-spool discovery and retention deadline.
+- Handoff notes: Capture is spool-first; rolling decode is now serialized live preview only; Stop finalizes the complete spool into offset-based segments; cleanup happens only after successful Markdown write. Failure preserves the spool and shows an incomplete-transcription status. A dedicated recovery UI/retry command, finalization deadline, REST/MCP privacy checks, and manual Russian performance acceptance remain next; do not return to string-level rolling heuristics.
+
+## Fast Transcription Start
+
+- Status: Superseded / Not Ready For Main
+- Owner: Codex + BA/Architecture/STT/Acceptance/Developer agents
+- User outcome: Pressing Start begins local recording immediately and gets to the first Russian live transcript text faster by moving WhisperKit runtime preparation out of the meeting-start path when the verified model is already installed.
+- Scope: Prewarm the verified local Russian rolling WhisperKit runtime after model readiness refresh and after successful model installation, reuse an already prepared rolling engine at recording Start, keep the prepared engine warm across normal recording Stop, start the recording timer before waiting for STT readiness, continue replaying runtime-only captured audio after STT readiness, and use a shorter first rolling decode window before returning to the steady rolling window.
+- Out of scope: Cloud transcription, hidden model downloads, raw audio retention, model policy changes, calendar/hotkey/menu bar behavior, idle timeout or memory-pressure cooldown automation, UI redesign, system-audio transcription, SQLite/REST/MCP changes, and WhisperKit model accuracy tuning.
+- Docs touched: `docs/product/BRD.md`, `docs/architecture.md`, `docs/workstreams.md`.
+- Verification: `swift run Meeting007CoreChecks` passed; `swift run Meeting007WhisperKitChecks` passed; `swift build --product Meeting007App` passed with sandbox escalation for Swift/clang cache access. Manual Apple Silicon Russian latency QA is still required before merge to `main`.
+- Gates: BA approved the fast-start requirement with local-only prewarm and immediate capture; architecture/STT/performance approved moving runtime load out of Start while preserving model verification and capture independence; Acceptance/QA + Developer/TDD approved implementation after checks for warm reuse, missing-model no-build, replay/no-duplication, initial short window, and Stop reliability.
+- Subagents: BA `019edb76-c827-7672-b051-7e0deb252893`; architecture/STT/performance `019edb76-db47-74c2-8391-6966b8719dc0`; Acceptance/QA + Developer/TDD `019edb76-f688-7fb2-a029-d4db4fb00ec4`.
+- TDD/BDD evidence: Added core checks that the first rolling decode uses a configured short initial window and later decodes use the normal window, and that live partial text does not repeat an already committed prefix when WhisperKit changes punctuation/casing across rolling hypotheses; added WhisperKit checks that a prepared warm rolling engine is reused without rebuilding/preparing at Start, that session Stop can keep the warm engine alive when configured, and that live rolling decode does not request unused word timestamps. Existing replay/no-duplication and missing-model no-engine checks still cover the buffered-audio and unavailable-model paths.
+- Open decisions: Exact idle timeout or memory-pressure cooldown policy for releasing the warm runtime; measured acceptance threshold with the real installed model on Apple Silicon; whether a future status should expose warm/idle states beyond current calm transcription status.
+- Handoff notes: This slice deliberately uses the existing `WhisperKitRollingWindowTranscriber` actor as the warm-engine owner instead of adding a larger runtime pool. Real user trials showed this is insufficient: transcription still starts late, the rolling runtime can fail, and Stop/final behavior is not robust enough. Do not merge this as the production answer to fast transcription; carry forward only useful pieces after the loss-resistant local ASR pipeline is designed.
+
 ## Wire Rolling Pipeline Into Recording Flow
 
 - Status: Done

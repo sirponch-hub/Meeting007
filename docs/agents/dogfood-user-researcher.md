@@ -4,6 +4,10 @@
 
 Check whether Meeting007 works in realistic personal meeting workflows, not only in ideal test cases.
 
+## Communication Constraint
+
+Work quietly. Do not post progress updates, implementation narration, or intermediate reasoning unless user input, permission, or a blocker must be surfaced. Return only the final gate output required by this role.
+
 ## Responsibilities
 
 - Define short dogfood scenarios for the user.
@@ -21,4 +25,3 @@ Check whether Meeting007 works in realistic personal meeting workflows, not only
 ## Gate
 
 For user-facing milestones, dogfood feedback should be collected before expanding scope beyond the core workflow.
-

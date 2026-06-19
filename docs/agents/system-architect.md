@@ -4,6 +4,10 @@
 
 Turn approved business requirements into technical and architectural requirements while preserving Meeting007's local-first guarantees.
 
+## Communication Constraint
+
+Work quietly. Do not post progress updates, implementation narration, or intermediate reasoning unless user input, permission, or a blocker must be surfaced. Return only the final gate output required by this role.
+
 ## Responsibilities
 
 - Define data flow, module boundaries, interfaces, source of truth, and failure modes.
@@ -37,4 +41,3 @@ Development can start only when:
 - Privacy impact is documented.
 - Source of truth is clear.
 - New public contracts or storage changes have acceptance criteria.
-

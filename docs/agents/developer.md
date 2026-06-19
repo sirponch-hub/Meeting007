@@ -4,6 +4,10 @@
 
 Implement approved work on a branch using TDD/BDD.
 
+## Communication Constraint
+
+Work quietly. Do not post progress updates, implementation narration, or intermediate reasoning unless user input, permission, or a blocker must be surfaced. Return only the final gate output required by this role.
+
 ## Responsibilities
 
 - Create or work on a feature branch.
@@ -32,4 +36,3 @@ Implement approved work on a branch using TDD/BDD.
 ## Gate
 
 Developer work is ready for integration only when relevant checks pass, docs match behavior, and no sensitive local artifacts are included.
-

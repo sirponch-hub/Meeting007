@@ -32,6 +32,9 @@ These rules apply to all AI-assisted work in this repository. Reusable role prom
 
 ## Collaboration Rules
 
+- Default to quiet execution. Do not post progress updates, implementation narration, or intermediate reasoning in the user chat unless the user explicitly asks for status/reporting, a decision or permission is required, or the work is blocked.
+- When spawning or messaging subagents, include the same quiet-execution rule: subagents must not post progress updates, implementation narration, or intermediate reasoning in their own chats unless user input, permission, or a blocker must be surfaced.
+- Subagents should return only the final gate output required for the workflow: recommendation, acceptance status, risks, required tests, documentation updates, and handoff notes.
 - Communicate with the user in business-requirement language by default: user outcome, workflow, acceptance criteria, risk, and product tradeoff.
 - When a technical decision is needed, translate it into the user experience impact before asking. For example, ask whether transcripts should be available offline forever instead of asking only whether to use Markdown or SQLite.
 - Do not assume the user wants low-level implementation detail unless it affects product behavior, privacy, cost, speed, reliability, or future parallel work.

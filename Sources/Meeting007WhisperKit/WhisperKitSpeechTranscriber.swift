@@ -62,9 +62,15 @@ public enum WhisperKitTranscriptionPipelineFactory {
     ) -> RollingLocalTranscriptionPipeline {
         let transcriber = WhisperKitRollingWindowTranscriber(
             modelPathProvider: modelPathProvider,
-            configuration: configuration
+            configuration: configuration,
+            keepsEngineWarmAfterStop: true
         )
-        return RollingLocalTranscriptionPipeline(decoder: transcriber, lifecycle: transcriber)
+        return RollingLocalTranscriptionPipeline(
+            decoder: transcriber,
+            lifecycle: transcriber,
+            initialWindowDuration: 3,
+            windowDuration: 20
+        )
     }
 }
 

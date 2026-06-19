@@ -28,7 +28,8 @@ Detailed user-step decomposition lives in [User Steps](user-steps.md). Implement
 1. User opens Meeting007.
 2. App can use Google Calendar context when calendar access has been granted.
 3. User starts recording manually from the main app window, with or without calendar context.
-4. App confirms active capture and starts showing transcript output.
+4. App confirms active capture immediately.
+5. App starts showing live transcript output as soon as the local live transcription worker has enough speech, without waiting for a final-quality transcription pass.
 
 ### Use Transcript During A Meeting
 
@@ -40,9 +41,10 @@ Detailed user-step decomposition lives in [User Steps](user-steps.md). Implement
 ### Finish A Meeting
 
 1. User stops recording.
-2. App finalizes pending transcript segments.
-3. App writes a Markdown transcript to the user's selected transcript folder and updates the SQLite index.
-4. The meeting becomes available through the app, local REST API, and MCP tools.
+2. App stops capture promptly and keeps the UI responsive.
+3. App finalizes pending transcript segments from the local captured-audio session buffer.
+4. App writes a Markdown transcript to the user's selected transcript folder and updates the SQLite index.
+5. The meeting becomes available through the app, local REST API, and MCP tools.
 
 ### Control Transcript Storage
 
@@ -80,6 +82,13 @@ Enhancement:
 - The app must route live transcript text through a local STT pipeline boundary before the production Whisper runtime is connected.
 - The UI must not imply that deterministic STT pipeline text is production Whisper output until real local Whisper runtime ships.
 - The app must support Russian as the default transcription language.
+- The app must separate local audio capture, live transcription, and final transcript reconciliation into distinct pipeline stages.
+- The app must start audio capture immediately when the user presses Start, independent of local STT runtime readiness.
+- The app must maintain an ordered local audio session buffer with lane, sequence, sample-start, and sample-end metadata so transcription can recover from local STT delays or failures.
+- The app may retain raw audio only as a temporary local session spool needed to prevent transcript loss before finalization; this spool must be deleted after successful final transcript completion unless a separate explicit retention setting is later designed.
+- The app must not expose temporary raw audio through Markdown, SQLite transcript records, REST, MCP, logs, debug dumps, telemetry, or cloud services.
+- Live transcript output must be treated as draft text until reconciled into committed/final segments.
+- Final transcript reconciliation must run separately from the live transcript worker and must not block stopping capture.
 - During an active meeting, the app must let the user copy the full finalized transcript captured so far without stopping recording.
 - Full transcript copy must not present partial/live text as final transcript content.
 - The app must save final transcripts as Markdown.
@@ -99,7 +108,13 @@ Enhancement:
 ## Non-Functional Requirements
 
 - Live partial transcript should appear within 2-4 seconds of speech on normal Apple Silicon hardware.
-- Final transcript should be available within 10 seconds after stopping a 30-60 minute meeting, excluding any optional full re-transcription.
+- Live preview must expose one replaceable partial segment; an older decode must not overwrite a newer result or appear beside a contradictory final row.
+- A transient local decode failure must not stop capture and must clear after the next successful decode in the same session.
+- Target live partial transcript should appear within 0.5-1.5 seconds of speech when the local live transcription worker is warm on normal Apple Silicon hardware.
+- Pressing Start should not wait for local STT runtime initialization; model warming may improve latency but must not be the only loss-prevention mechanism.
+- Pressing Stop should stop capture promptly and must not wait indefinitely for final transcript reconciliation.
+- Final transcript should be available within 10 seconds after stopping a 30-60 minute meeting when the finalizer is healthy; if finalization exceeds its deadline, the app must preserve the local spool and surface a recoverable finalization state instead of hanging or discarding transcript data.
+- The app must emit local-only latency markers for development/QA measurement: start pressed, first audio frame, live worker ready, first partial, stop pressed, capture stopped, finalization started, and finalization completed or failed.
 - The app UI must remain responsive while recording and transcribing.
 - The system must work without internet access after local models are installed.
 - Data must remain local by default.
@@ -119,11 +134,14 @@ Enhancement:
 
 - User can start and stop recording manually on an Apple Silicon Mac.
 - User can see and choose the microphone used for new recordings before starting a meeting.
-- User can see live transcript text while a meeting is active.
+- User can see live Russian transcript draft text shortly after speech begins while a meeting is active.
 - User can copy the last 5 minutes and the full transcript during a meeting.
-- Stopping a meeting creates a Markdown transcript and SQLite index entry.
+- Stopping a meeting stops capture promptly, then finalizes from local buffered audio without losing the captured tail.
+- Full-spool finalization must include the first and last captured audio ranges even when live transcription starts late or fails temporarily.
+- Stopping a meeting creates a Markdown transcript and SQLite index entry after finalization.
 - User can choose the folder used for new Markdown transcript exports.
 - User can explicitly migrate existing Markdown transcripts to the active transcript folder when that separate function ships.
 - Google Calendar MVP can populate title and participants for a recording without making calendar access mandatory.
 - REST and MCP can retrieve the same transcript data.
 - No audio or transcript data leaves the Mac in the default v1 path.
+- Temporary raw audio spools remain local, are not exposed as transcript artifacts, and are removed after successful finalization unless a future explicit retention decision changes that behavior.

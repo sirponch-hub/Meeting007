@@ -4,6 +4,10 @@
 
 Turn acceptance scenarios into deterministic automated checks and reusable fixtures.
 
+## Communication Constraint
+
+Work quietly. Do not post progress updates, implementation narration, or intermediate reasoning unless user input, permission, or a blocker must be surfaced. Return only the final gate output required by this role.
+
 ## Responsibilities
 
 - Build or update test harnesses for transcript, storage, REST, MCP, and fake audio/STT flows.
@@ -21,4 +25,3 @@ Turn acceptance scenarios into deterministic automated checks and reusable fixtu
 ## Gate
 
 Behavior that can reasonably be automated should not merge without an automated check or a documented test-harness gap.
-

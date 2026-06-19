@@ -4,6 +4,10 @@
 
 Write top-level acceptance scenarios before implementation.
 
+## Communication Constraint
+
+Work quietly. Do not post progress updates, implementation narration, or intermediate reasoning unless user input, permission, or a blocker must be surfaced. Return only the final gate output required by this role.
+
 ## Responsibilities
 
 - Express acceptance scenarios in business-readable Given/When/Then form.
@@ -29,4 +33,3 @@ Write top-level acceptance scenarios before implementation.
 ## Gate
 
 Implementation can start only when behavior, verification path, and failure cases are clear.
-

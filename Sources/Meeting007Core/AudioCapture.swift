@@ -255,7 +255,7 @@ public actor RuntimeOnlyAudioChunkConsumer: AudioChunkConsumer {
         self.vad = VADSpeechChunker(configuration: vadConfiguration)
     }
 
-    public func begin(sessionID: UUID) {
+    public func begin(sessionID: UUID) async {
         deliveryTask?.cancel()
         deliveryTask = nil
         pendingSpeechChunks.removeAll()

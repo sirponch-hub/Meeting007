@@ -33,6 +33,11 @@ struct Meeting007CoreChecks {
         checkMicrophoneDeviceSelectionPersistsChosenInput()
         checkMicrophoneDeviceSelectionCanReturnToSystemInput()
         checkRuntimeAudioNormalizerDownmixesAndResamplesToMono16k()
+        await checkCaptureSpoolPersistsOrderedLaneAudioAndRecovers()
+        await checkCaptureSpoolRejectsWrongAndLateSessions()
+        await checkLossResistantCaptureSpoolsBeforeSlowLiveConsumer()
+        await checkLossResistantCaptureBoundsSlowLiveBacklog()
+        await checkCaptureLatencyMarkersAreOrderedAndPrivate()
         await checkRuntimeAudioConsumerAcceptsOnlyActiveSampleBearingChunks()
         await checkRuntimeAudioConsumerForwardsChunksToRollingLivePipeline()
         await checkRuntimeAudioConsumerDoesNotBlockCaptureOnSlowTranscription()
@@ -54,6 +59,17 @@ struct Meeting007CoreChecks {
         await checkRollingLocalTranscriptionPipelineStopTimeoutKeepsBestVisibleDraft()
         await checkRollingLocalTranscriptionPipelineIgnoresLateDecodeAfterStopTimeout()
         await checkRollingLocalTranscriptionPipelineIgnoresReplayedAudioChunks()
+        await checkRollingLocalTranscriptionPipelineUsesShortInitialWindow()
+        await checkRollingPipelineSerializesAndCoalescesLiveDecode()
+        await checkRollingPipelineSkipsDecodeWithoutNewAudio()
+        await checkRollingPipelineRecoversAfterTransientDecodeFailure()
+        await checkRollingPipelineReplacesOneStablePartial()
+        await checkSpoolFinalizerCoversCompleteAudioByOffsets()
+        await checkProductionSpoolRecoveryFeedsCompleteFinalizer()
+        await checkStopSerializesInFlightLiveAndSpoolFinalDecode()
+        await checkSpoolFinalizationFailureIsRecoverable()
+        await checkEmptyFinalTranscriptPreservesCapturedAudio()
+        await checkFailedFinalizationKeepsClosedSpoolRecoverable()
         checkLocalAgreementStabilizerCommitsOnlyStablePrefix()
         checkRollingSeamFilterRemovesPromptEchoBeforeStabilizer()
         checkRollingSeamFilterCollapsesOverlappingWindowText()
@@ -61,6 +77,7 @@ struct Meeting007CoreChecks {
         checkRollingSeamFilterDoesNotGloballyDedupeRepeatedPhrase()
         checkRollingSeamFilterPreservesShortRepeatedSpeechAtWindowBoundary()
         checkLocalAgreementStabilizerRejectsIncompatibleLongerPrefix()
+        checkLocalAgreementStabilizerTrimsCommittedOverlapFromPartial()
         await checkRollingStreamingSessionReplacesRepeatedPartialInsteadOfAppending()
         await checkRollingStreamingSessionKeepsCommittedBeginningAcrossShiftedWindows()
         await checkRollingStreamingSessionFinalizesBestVisibleDraft()
@@ -701,6 +718,179 @@ struct Meeting007CoreChecks {
         require(normalized.byteCount == normalized.samples.count * MemoryLayout<Float>.size, "Runtime PCM byte count must match Float sample payload.")
     }
 
+    private static func checkCaptureSpoolPersistsOrderedLaneAudioAndRecovers() async {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Meeting007CoreChecks-spool-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        let sessionID = UUID()
+        let spool = LocalCaptureSessionSpool(rootURL: rootURL)
+
+        do {
+            try await spool.begin(sessionID: sessionID)
+            let firstMic = makeCapturedAudioChunk(sessionID: sessionID, lane: .mic, startedAt: 0, amplitude: 0.2, duration: 0.25)
+            let system = makeCapturedAudioChunk(sessionID: sessionID, lane: .system, startedAt: 0, amplitude: 0.1, duration: 0.125)
+            let secondMic = makeCapturedAudioChunk(sessionID: sessionID, lane: .mic, startedAt: 0.25, amplitude: 0.3, duration: 0.25)
+            _ = try await spool.append(firstMic)
+            _ = try await spool.append(system)
+            _ = try await spool.append(secondMic)
+            try await spool.close(sessionID: sessionID)
+
+            let journalURL = rootURL
+                .appendingPathComponent(sessionID.uuidString.lowercased(), isDirectory: true)
+                .appendingPathComponent("chunks.jsonl")
+            let journalHandle = try FileHandle(forWritingTo: journalURL)
+            try journalHandle.seekToEnd()
+            try journalHandle.write(contentsOf: Data("{\"partial\":".utf8))
+            try journalHandle.close()
+
+            let recoveredSpool = LocalCaptureSessionSpool(rootURL: rootURL)
+            let snapshot = try await recoveredSpool.readSession(sessionID)
+            require(snapshot.state == .closed, "Closed capture spool must remain recoverable until explicit cleanup.")
+            require(snapshot.chunks.map(\.sequence) == [0, 1, 2], "Capture spool must retain one global append order.")
+            require(snapshot.chunks.map(\.sampleStart) == [0, 0, firstMic.samples.frameCount], "Capture spool must keep independent sample offsets per lane.")
+            require(snapshot.chunks.map(\.sampleEnd) == [firstMic.samples.frameCount, system.samples.frameCount, firstMic.samples.frameCount + secondMic.samples.frameCount], "Capture spool lane offsets must end at the persisted frame count.")
+            let recoveredSamples = try await recoveredSpool.readSamples(for: snapshot.chunks[0])
+            require(recoveredSamples == firstMic.samples, "Capture spool must recover the first audio samples exactly.")
+
+            let sessionDirectory = rootURL.appendingPathComponent(sessionID.uuidString.lowercased(), isDirectory: true)
+            let directoryAttributes = try FileManager.default.attributesOfItem(atPath: sessionDirectory.path)
+            require((directoryAttributes[.posixPermissions] as? NSNumber)?.intValue == 0o700, "Capture spool session directories must be owner-only.")
+            let micFile = sessionDirectory.appendingPathComponent("mic.f32le")
+            let fileAttributes = try FileManager.default.attributesOfItem(atPath: micFile.path)
+            require((fileAttributes[.posixPermissions] as? NSNumber)?.intValue == 0o600, "Capture spool audio files must be owner-only.")
+            try await recoveredSpool.cleanup(sessionID: sessionID)
+            require(!FileManager.default.fileExists(atPath: sessionDirectory.path), "Explicit cleanup must remove the closed capture spool.")
+        } catch {
+            require(false, "Capture spool ordered recovery check failed: \(error)")
+        }
+    }
+
+    private static func checkCaptureSpoolRejectsWrongAndLateSessions() async {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Meeting007CoreChecks-spool-reject-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        let sessionID = UUID()
+        let spool = LocalCaptureSessionSpool(rootURL: rootURL)
+
+        do {
+            try await spool.begin(sessionID: sessionID)
+            do {
+                _ = try await spool.append(makeCapturedAudioChunk(sessionID: UUID(), startedAt: 0, amplitude: 0.2))
+                require(false, "Capture spool must reject chunks from another session.")
+            } catch {
+                require(error as? CaptureSessionSpoolError == .wrongSession, "Wrong-session append must return a stable spool error.")
+            }
+            try await spool.close(sessionID: sessionID)
+            do {
+                _ = try await spool.append(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0, amplitude: 0.2))
+                require(false, "Capture spool must reject late chunks after close.")
+            } catch {
+                require(error as? CaptureSessionSpoolError == .noActiveSession, "Late append must return a stable spool error.")
+            }
+        } catch {
+            require(false, "Capture spool rejection check failed: \(error)")
+        }
+    }
+
+    private static func checkLossResistantCaptureSpoolsBeforeSlowLiveConsumer() async {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Meeting007CoreChecks-loss-resistant-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        let sessionID = UUID()
+        let spool = LocalCaptureSessionSpool(rootURL: rootURL)
+        let blockingLiveConsumer = BlockingAudioChunkConsumer()
+        let runtimeConsumer = RuntimeOnlyAudioChunkConsumer(liveAudioConsumer: blockingLiveConsumer)
+        let markers = CaptureLatencyMarkers()
+        let captureSession = LossResistantCaptureSession(
+            spool: spool,
+            markers: markers,
+            liveConsumer: runtimeConsumer
+        )
+        let chunk = makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0, amplitude: 0.2)
+
+        do {
+            try await captureSession.begin(sessionID: sessionID)
+            await captureSession.receive(chunk)
+            let start = ContinuousClock.now
+            try await captureSession.close(sessionID: sessionID)
+            let elapsed = start.duration(to: .now)
+            require(elapsed < .milliseconds(250), "Capture Stop must not wait for a blocked live transcription consumer.")
+            let snapshot = try await spool.readSession(sessionID)
+            require(snapshot.state == .closed && snapshot.chunks.count == 1, "Stop must close and preserve the spool even when live transcription is blocked.")
+            let recovered = try await spool.readSamples(for: snapshot.chunks[0])
+            require(recovered == chunk.samples, "The first audio must be recoverable before delayed live transcription completes.")
+            let events = await markers.markers(sessionID: sessionID).map(\.event)
+            require(
+                events.prefix(3) == [.startRequested, .spoolReady, .firstAudioReceived],
+                "Capture lifecycle must mark Start, spool readiness, and first audio in order."
+            )
+            require(
+                events.contains(.firstAudioSpooled) && events.last == .spoolClosed,
+                "Capture lifecycle must mark persisted first audio and finish with spool closure."
+            )
+            let stopRequestedIndex = events.firstIndex(of: .stopRequested)
+            let captureStoppedIndex = events.firstIndex(of: .captureStopped)
+            require(
+                stopRequestedIndex != nil && captureStoppedIndex != nil && stopRequestedIndex! < captureStoppedIndex!,
+                "Stop requested must be marked before microphone capture reports stopped."
+            )
+            await blockingLiveConsumer.release()
+        } catch {
+            require(false, "Loss-resistant capture ordering check failed: \(error)")
+        }
+    }
+
+    private static func checkLossResistantCaptureBoundsSlowLiveBacklog() async {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Meeting007CoreChecks-live-backlog-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        let sessionID = UUID()
+        let spool = LocalCaptureSessionSpool(rootURL: rootURL)
+        let blockingLiveConsumer = BlockingAudioChunkConsumer()
+        let runtimeConsumer = RuntimeOnlyAudioChunkConsumer(liveAudioConsumer: blockingLiveConsumer)
+        let captureSession = LossResistantCaptureSession(spool: spool, liveConsumer: runtimeConsumer)
+
+        do {
+            try await captureSession.begin(sessionID: sessionID)
+            for index in 0..<80 {
+                await captureSession.receive(makeCapturedAudioChunk(
+                    sessionID: sessionID,
+                    startedAt: Double(index) * 0.01,
+                    amplitude: 0.2,
+                    duration: 0.01
+                ))
+            }
+            try await captureSession.close(sessionID: sessionID)
+            let shouldPreserve = await captureSession.shouldPreserveSpool()
+            require(shouldPreserve, "A dropped live-preview backlog must preserve the complete local spool for recovery.")
+            let snapshot = try await spool.readSession(sessionID)
+            require(snapshot.chunks.count == 80, "Bounding the slow live queue must not drop captured spool audio.")
+            await blockingLiveConsumer.release()
+        } catch {
+            require(false, "Bounded live backlog check failed: \(error)")
+        }
+    }
+
+    private static func checkCaptureLatencyMarkersAreOrderedAndPrivate() async {
+        let clock = LockedTestClock(values: [4, 3, 8])
+        let markers = CaptureLatencyMarkers(clock: { clock.next() })
+        let sessionID = UUID()
+
+        await markers.mark(sessionID: sessionID, event: .startRequested)
+        await markers.mark(sessionID: sessionID, event: .spoolReady)
+        await markers.mark(sessionID: sessionID, event: .firstAudioReceived)
+        let recorded = await markers.markers(sessionID: sessionID)
+        require(recorded.map(\.timestamp) == [4, 4, 8], "Latency markers must remain monotonic when the injected clock regresses.")
+
+        do {
+            let encoded = try JSONEncoder().encode(recorded)
+            let json = String(decoding: encoded, as: UTF8.self)
+            require(!json.contains("samples") && !json.contains("text") && !json.contains("path"), "Latency markers must not contain audio, transcript text, or local paths.")
+        } catch {
+            require(false, "Latency marker privacy check failed: \(error)")
+        }
+    }
+
     private static func checkMicrophoneDeviceSelectionPersistsChosenInput() {
         let suiteName = "Meeting007CoreChecks.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
@@ -1162,6 +1352,286 @@ struct Meeting007CoreChecks {
         require(windows.first?.duration == earlyChunk.duration, "Rolling live pipeline must keep only the original early audio duration.")
     }
 
+    private static func checkRollingLocalTranscriptionPipelineUsesShortInitialWindow() async {
+        let sessionID = UUID()
+        let decoder = ScriptedRollingWindowDecoder(outputs: [
+            "первое короткое окно",
+            "второе обычное окно"
+        ])
+        let pipeline = RollingLocalTranscriptionPipeline(
+            decoder: decoder,
+            bufferDuration: 30,
+            initialWindowDuration: 2,
+            windowDuration: 8
+        )
+
+        let start = await pipeline.start(STTSessionConfig(sessionID: sessionID))
+        require(start == .ready, "Rolling pipeline must start before initial-window tuning can be checked.")
+
+        for index in 0..<10 {
+            await pipeline.receive(makeCapturedAudioChunk(
+                sessionID: sessionID,
+                startedAt: Double(index),
+                amplitude: 0.2,
+                duration: 1
+            ))
+        }
+        _ = await pipeline.tick()
+        await pipeline.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 10, amplitude: 0.2, duration: 1))
+        _ = await pipeline.tick()
+
+        let windows = await decoder.receivedWindows()
+        require(windows.count == 2, "Initial-window check must decode twice.")
+        require(windows[0].duration == 2, "First rolling decode must use the shorter initial window for faster first text.")
+        require(windows[0].startedAt == 8, "Short first window must use the most recent initial audio.")
+        require(windows[1].duration == 8, "Later rolling decodes must return to the normal steady window.")
+    }
+
+    private static func checkRollingPipelineSerializesAndCoalescesLiveDecode() async {
+        let sessionID = UUID()
+        let decoder = ControllableRollingWindowDecoder(
+            outcomes: [.text("первая версия"), .text("вторая версия")],
+            blocksFirstCall: true
+        )
+        let pipeline = RollingLocalTranscriptionPipeline(decoder: decoder)
+        _ = await pipeline.start(STTSessionConfig(sessionID: sessionID))
+        await pipeline.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0, amplitude: 0.2))
+
+        let firstTick = Task { await pipeline.tick() }
+        await decoder.waitForCallCount(1)
+        await pipeline.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 1, amplitude: 0.2))
+        for _ in 0..<5 {
+            _ = await pipeline.tick()
+        }
+
+        let blockedCallCount = await decoder.recordedCallCount()
+        let blockedMaximumActiveCount = await decoder.recordedMaximumActiveCount()
+        require(blockedCallCount == 1, "Timer pressure must not start a second decode while the first is active.")
+        require(blockedMaximumActiveCount == 1, "Rolling decode concurrency must remain exactly one.")
+        await decoder.releaseFirstCall()
+        _ = await firstTick.value
+        let completedCallCount = await decoder.recordedCallCount()
+        let completedMaximumActiveCount = await decoder.recordedMaximumActiveCount()
+        require(completedCallCount == 2, "Repeated ticks during decode must coalesce into one follow-up for new audio.")
+        require(completedMaximumActiveCount == 1, "Coalesced follow-up decode must remain serialized.")
+    }
+
+    private static func checkRollingPipelineSkipsDecodeWithoutNewAudio() async {
+        let sessionID = UUID()
+        let decoder = ControllableRollingWindowDecoder(outcomes: [.text("одна версия")])
+        let pipeline = RollingLocalTranscriptionPipeline(decoder: decoder)
+        _ = await pipeline.start(STTSessionConfig(sessionID: sessionID))
+        await pipeline.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0, amplitude: 0.2))
+        _ = await pipeline.tick()
+        _ = await pipeline.tick()
+        _ = await pipeline.tick()
+
+        let callCount = await decoder.recordedCallCount()
+        require(callCount == 1, "Ticks without advanced audio must not repeat heavy local decode.")
+    }
+
+    private static func checkRollingPipelineRecoversAfterTransientDecodeFailure() async {
+        let sessionID = UUID()
+        let decoder = ControllableRollingWindowDecoder(outcomes: [
+            .failure,
+            .text("распознавание восстановилось")
+        ])
+        let pipeline = RollingLocalTranscriptionPipeline(decoder: decoder)
+        _ = await pipeline.start(STTSessionConfig(sessionID: sessionID))
+        await pipeline.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0, amplitude: 0.2))
+
+        _ = await pipeline.tick()
+        let transientFailure = await pipeline.lastFailure()
+        require(transientFailure != nil, "Transient decode failure must be observable while capture remains active.")
+        let recovered = await pipeline.tick()
+
+        let recoveredFailure = await pipeline.lastFailure()
+        require(recoveredFailure == nil, "A successful retry in the same session must clear the current runtime failure.")
+        require(recovered.first?.text == "распознавание восстановилось", "Successful retry must replace the live partial with recovered Russian text.")
+    }
+
+    private static func checkRollingPipelineReplacesOneStablePartial() async {
+        let sessionID = UUID()
+        let decoder = ControllableRollingWindowDecoder(outcomes: [
+            .text("первая версия текста"),
+            .text("первая версия текста обновилась")
+        ])
+        let pipeline = RollingLocalTranscriptionPipeline(decoder: decoder)
+        _ = await pipeline.start(STTSessionConfig(sessionID: sessionID))
+        await pipeline.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0, amplitude: 0.2))
+        let first = await pipeline.tick()
+        await pipeline.receive(makeCapturedAudioChunk(sessionID: sessionID, startedAt: 1, amplitude: 0.2))
+        let second = await pipeline.tick()
+
+        require(first.count == 1 && second.count == 1, "Live rolling UI must expose one segment instead of stale final plus partial rows.")
+        require(first.first?.state == .partial && second.first?.state == .partial, "Live rolling text must remain one replaceable partial until Stop.")
+        require(first.first?.id == second.first?.id, "Live partial updates must keep one stable segment identity.")
+        require(second.first?.text == "первая версия текста обновилась", "The latest successful hypothesis must replace the prior partial text.")
+    }
+
+    private static func checkSpoolFinalizerCoversCompleteAudioByOffsets() async {
+        let sessionID = UUID()
+        let decoder = ControllableRollingWindowDecoder(outcomes: [
+            .text("НАЧАЛО КОНТРОЛЬ"),
+            .text("середина встречи"),
+            .text("КОНЕЦ КОНТРОЛЬ")
+        ])
+        let chunks = (0..<45).map { index in
+            makeCapturedAudioChunk(
+                sessionID: sessionID,
+                startedAt: Double(index),
+                amplitude: Float(index + 1) / 100,
+                duration: 1,
+                sampleRate: 10
+            )
+        }
+
+        do {
+            let result = try await SpoolTranscriptFinalizer(
+                decoder: decoder,
+                maximumWindowDuration: 20
+            ).finalize(sessionID: sessionID, chunks: chunks)
+            let windows = await decoder.recordedWindows()
+
+            require(result.processedFrameCount == 450, "Spool finalizer must process the exact full-session sample count.")
+            require(windows.map(\.startedAt) == [0, 20, 40], "Spool finalizer must decode from sample offset zero through the final range without overlap.")
+            require(windows.map(\.duration) == [20, 20, 5], "Spool finalizer must include the last available audio frames.")
+            require(result.segments.first?.text == "НАЧАЛО КОНТРОЛЬ", "Authoritative final transcript must retain the beginning beyond the rolling buffer.")
+            require(result.segments.last?.text == "КОНЕЦ КОНТРОЛЬ", "Authoritative final transcript must retain the final spoken tail.")
+        } catch {
+            require(false, "Complete spool finalization check failed: \(error)")
+        }
+    }
+
+    private static func checkProductionSpoolRecoveryFeedsCompleteFinalizer() async {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Meeting007CoreChecks-production-finalizer-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        let sessionID = UUID()
+        let spool = LocalCaptureSessionSpool(rootURL: rootURL)
+        let captureSession = LossResistantCaptureSession(spool: spool)
+        let decoder = ControllableRollingWindowDecoder(outcomes: [
+            .text("НАЧАЛО ИЗ SPOOL"),
+            .text("СЕРЕДИНА ИЗ SPOOL"),
+            .text("КОНЕЦ ИЗ SPOOL")
+        ])
+
+        do {
+            try await captureSession.begin(sessionID: sessionID)
+            for index in 0..<45 {
+                await captureSession.receive(makeCapturedAudioChunk(
+                    sessionID: sessionID,
+                    startedAt: Double(index),
+                    amplitude: Float(index + 1) / 100,
+                    duration: 1,
+                    sampleRate: 10
+                ))
+            }
+            try await captureSession.close(sessionID: sessionID)
+            let result = try await SpoolTranscriptFinalizer(
+                decoder: decoder,
+                maximumWindowDuration: 20
+            ).finalize(sessionID: sessionID, spool: spool)
+            let snapshot = try await spool.readSession(sessionID)
+
+            require(snapshot.chunks.count == 45, "Production spool must contain every ordered captured chunk.")
+            require(result.processedFrameCount == 450, "Production spool recovery must feed every captured frame to finalization.")
+            require(result.segments.first?.text == "НАЧАЛО ИЗ SPOOL", "Production recovery must retain the first spool range.")
+            require(result.segments.last?.text == "КОНЕЦ ИЗ SPOOL", "Production recovery must retain the final spool range.")
+        } catch {
+            require(false, "Production spool recovery finalization check failed: \(error)")
+        }
+    }
+
+    private static func checkStopSerializesInFlightLiveAndSpoolFinalDecode() async {
+        let sessionID = UUID()
+        let decoder = ControllableRollingWindowDecoder(
+            outcomes: [.text("live результат"), .text("полный final результат")],
+            blocksFirstCall: true
+        )
+        let pipeline = RollingLocalTranscriptionPipeline(decoder: decoder)
+        let chunk = makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0, amplitude: 0.2)
+        _ = await pipeline.start(STTSessionConfig(sessionID: sessionID))
+        await pipeline.receive(chunk)
+        let liveTick = Task { await pipeline.tick() }
+        await decoder.waitForCallCount(1)
+        let stopTask = Task {
+            await pipeline.stop(sessionID: sessionID, finalizationChunks: [chunk])
+        }
+        while !(await pipeline.isFinalizing()) {
+            await Task.yield()
+        }
+
+        let blockedCallCount = await decoder.recordedCallCount()
+        require(blockedCallCount == 1, "Stop must not start spool final decode while a live decode is still active.")
+        await decoder.releaseFirstCall()
+        _ = await liveTick.value
+        let result = await stopTask.value
+        let maximumActive = await decoder.recordedMaximumActiveCount()
+        let completedCallCount = await decoder.recordedCallCount()
+
+        require(maximumActive == 1, "Live and full-spool final decode must use the local runtime sequentially.")
+        require(completedCallCount == 2, "Stop must run exactly one full-spool decode after the in-flight live decode completes.")
+        require(result.finalizedCompleteAudio, "Serialized Stop must publish the complete spool finalization result.")
+    }
+
+    private static func checkSpoolFinalizationFailureIsRecoverable() async {
+        let sessionID = UUID()
+        let decoder = ControllableRollingWindowDecoder(outcomes: [.failure])
+        let pipeline = RollingLocalTranscriptionPipeline(decoder: decoder)
+        _ = await pipeline.start(STTSessionConfig(sessionID: sessionID))
+        let chunk = makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0, amplitude: 0.2)
+        await pipeline.receive(chunk)
+
+        let result = await pipeline.stop(sessionID: sessionID, finalizationChunks: [chunk])
+
+        require(!result.finalizedCompleteAudio, "Failed spool decode must not be reported as complete finalization.")
+        let failure = await pipeline.lastFailure()
+        require(failure?.code == "local_stt_finalization_failed", "Failed spool decode must expose a recoverable finalization failure.")
+    }
+
+    private static func checkEmptyFinalTranscriptPreservesCapturedAudio() async {
+        let sessionID = UUID()
+        let pipeline = RollingLocalTranscriptionPipeline(
+            decoder: ControllableRollingWindowDecoder(outcomes: [.text("")])
+        )
+        let chunk = makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0, amplitude: 0.2)
+        _ = await pipeline.start(STTSessionConfig(sessionID: sessionID))
+
+        let result = await pipeline.stop(sessionID: sessionID, finalizationChunks: [chunk])
+        let failure = await pipeline.lastFailure()
+
+        require(!result.finalizedCompleteAudio, "Non-empty captured audio with an empty decode must not be treated as successful finalization.")
+        require(failure?.code == "local_stt_finalization_failed", "Empty final transcript must keep capture in recoverable finalization failure state.")
+    }
+
+    private static func checkFailedFinalizationKeepsClosedSpoolRecoverable() async {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Meeting007CoreChecks-failed-finalizer-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        let sessionID = UUID()
+        let spool = LocalCaptureSessionSpool(rootURL: rootURL)
+        let captureSession = LossResistantCaptureSession(spool: spool)
+        let pipeline = RollingLocalTranscriptionPipeline(
+            decoder: ControllableRollingWindowDecoder(outcomes: [.failure])
+        )
+
+        do {
+            try await captureSession.begin(sessionID: sessionID)
+            let chunk = makeCapturedAudioChunk(sessionID: sessionID, startedAt: 0, amplitude: 0.2)
+            await captureSession.receive(chunk)
+            try await captureSession.close(sessionID: sessionID)
+            _ = await pipeline.start(STTSessionConfig(sessionID: sessionID))
+            let result = await pipeline.stop(sessionID: sessionID, finalizationSpool: spool)
+            let reopened = try await LocalCaptureSessionSpool(rootURL: rootURL).readSession(sessionID)
+
+            require(!result.finalizedCompleteAudio, "Synthetic finalization failure must remain incomplete.")
+            require(reopened.state == .closed && reopened.chunks.count == 1, "Failed finalization must leave the closed real spool readable for recovery.")
+        } catch {
+            require(false, "Failed-finalization spool retention check failed: \(error)")
+        }
+    }
+
     private static func checkLocalAgreementStabilizerCommitsOnlyStablePrefix() {
         var stabilizer = LocalAgreementTranscriptStabilizer()
 
@@ -1233,6 +1703,18 @@ struct Meeting007CoreChecks {
 
         require(accepted.committedText == "первая важная фраза", "Test setup must commit the initial trusted beginning.")
         require(shifted.committedText == "первая важная фраза", "Committed transcript must not be replaced by a later shifted window, even if that window is longer.")
+    }
+
+    private static func checkLocalAgreementStabilizerTrimsCommittedOverlapFromPartial() {
+        var stabilizer = LocalAgreementTranscriptStabilizer()
+
+        _ = stabilizer.observe("Быстро говорю, быстро, быстро, быстро. быстро говорю. потом раз. и говорю. медленно. медленно,")
+        _ = stabilizer.observe("Быстро говорю, быстро, быстро, быстро. быстро говорю. потом раз. и говорю. медленно. медленно,")
+        let update = stabilizer.observe("Быстро говорю, быстро, быстро, быстро, быстро говорю, потом раз и говорю медленно, медленно, медленито, а потом опять быстро")
+
+        require(update.committedText.contains("Быстро говорю"), "Test setup must keep the spoken committed prefix.")
+        require(!update.partialText.hasPrefix("Быстро говорю"), "Live partial must not repeat text that is already committed with different punctuation.")
+        require(update.partialText.contains("медленито"), "Live partial must keep the new uncommitted suffix.")
     }
 
     private static func checkRollingStreamingSessionReplacesRepeatedPartialInsteadOfAppending() async {
@@ -2603,6 +3085,36 @@ private actor AsyncFlag {
     }
 }
 
+private final class LockedTestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [TimeInterval]
+
+    init(values: [TimeInterval]) {
+        self.values = values
+    }
+
+    func next() -> TimeInterval {
+        lock.lock()
+        defer { lock.unlock() }
+        return values.isEmpty ? 0 : values.removeFirst()
+    }
+}
+
+private actor BlockingAudioChunkConsumer: AudioChunkConsumer {
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func receive(_ chunk: CapturedAudioChunk) async {
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func release() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
 private actor BlockingSpeechChunkConsumer: SpeechChunkConsumer {
     private var shouldBlock = true
 
@@ -2685,6 +3197,91 @@ private actor ScriptedRollingWindowDecoder: RollingWindowTranscribing {
 
     func receivedPrompts() -> [String] {
         prompts
+    }
+}
+
+private enum ControllableDecoderOutcome: Sendable {
+    case text(String)
+    case failure
+}
+
+private struct ControllableDecoderFailure: Error {}
+
+private actor ControllableRollingWindowDecoder: RollingWindowTranscribing {
+    private var outcomes: [ControllableDecoderOutcome]
+    private let blocksFirstCall: Bool
+    private var firstCallContinuation: CheckedContinuation<Void, Never>?
+    private var callWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+    private var callCount = 0
+    private var activeCount = 0
+    private var maximumActiveCount = 0
+    private var windows: [RollingAudioWindow] = []
+
+    init(outcomes: [ControllableDecoderOutcome], blocksFirstCall: Bool = false) {
+        self.outcomes = outcomes
+        self.blocksFirstCall = blocksFirstCall
+    }
+
+    func transcribe(window: RollingAudioWindow, prompt: String) async throws -> RollingTranscriptionHypothesis {
+        callCount += 1
+        activeCount += 1
+        maximumActiveCount = max(maximumActiveCount, activeCount)
+        windows.append(window)
+        resumeSatisfiedCallWaiters()
+        let currentCall = callCount
+
+        if blocksFirstCall, currentCall == 1 {
+            await withCheckedContinuation { continuation in
+                firstCallContinuation = continuation
+            }
+        }
+
+        defer { activeCount -= 1 }
+        let outcome = outcomes.isEmpty ? .text("") : outcomes.removeFirst()
+        switch outcome {
+        case .text(let text):
+            return RollingTranscriptionHypothesis(
+                text: text,
+                windowStartedAt: window.startedAt,
+                windowEndedAt: window.startedAt + window.duration
+            )
+        case .failure:
+            throw ControllableDecoderFailure()
+        }
+    }
+
+    func waitForCallCount(_ expectedCount: Int) async {
+        guard callCount < expectedCount else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            callWaiters.append((expectedCount, continuation))
+        }
+    }
+
+    func releaseFirstCall() {
+        firstCallContinuation?.resume()
+        firstCallContinuation = nil
+    }
+
+    func recordedCallCount() -> Int {
+        callCount
+    }
+
+    func recordedMaximumActiveCount() -> Int {
+        maximumActiveCount
+    }
+
+    func recordedWindows() -> [RollingAudioWindow] {
+        windows
+    }
+
+    private func resumeSatisfiedCallWaiters() {
+        let satisfied = callWaiters.filter { callCount >= $0.count }
+        callWaiters.removeAll { callCount >= $0.count }
+        for waiter in satisfied {
+            waiter.continuation.resume()
+        }
     }
 }
 
