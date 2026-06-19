@@ -14,8 +14,12 @@ struct Meeting007WhisperKitChecks {
         await checkWhisperKitRuntimeFailureIsReported()
         await checkWhisperKitAdapterMapsResultToTranscriptSegment()
         await checkWhisperKitRollingAdapterBuildsEngineFromVerifiedModelDirectory()
+        await checkWhisperKitRollingAdapterReusesPreparedWarmEngine()
+        await checkWhisperKitRollingAdapterKeepsWarmEngineAfterStopWhenConfigured()
         await checkWhisperKitRollingAdapterDoesNotBuildEngineForMissingModelDirectory()
         await checkWhisperKitRollingAdapterForwardsPromptAndWindow()
+        await checkWhisperKitRollingAdapterDisablesWordTimestampsForLiveDecode()
+        await checkWhisperKitRollingAdapterSerializesRuntimeDecode()
         await checkWhisperKitRollingRuntimeFailureIsReported()
         await checkWhisperKitFailureDoesNotBreakFakeRussianSTT()
         checkWhisperKitAdapterDoesNotPersistSpeechChunks()
@@ -172,6 +176,48 @@ struct Meeting007WhisperKitChecks {
         require(hypothesis?.text == "проверка rolling decode", "Rolling WhisperKit adapter must return engine hypothesis text.")
     }
 
+    private static func checkWhisperKitRollingAdapterReusesPreparedWarmEngine() async {
+        let verifiedDirectory = URL(fileURLWithPath: "/tmp/Meeting007VerifiedWarmRollingModel", isDirectory: true)
+        let provider = FakeLocalSTTModelPathProvider(result: .ready(verifiedDirectory))
+        let factory = WhisperKitRollingEngineFactorySpy(result: "готовый warm runtime")
+        let adapter = WhisperKitRollingWindowTranscriber(
+            modelPathProvider: provider,
+            engineFactory: factory.makeEngine(modelDirectory:)
+        )
+
+        let prewarm = await adapter.prepare()
+        let startPrepare = await adapter.prepare()
+        let hypothesis = try? await adapter.transcribe(window: makeRollingWindow(startedAt: 1, duration: 1), prompt: "")
+
+        require(prewarm == .ready, "Warm rolling adapter prewarm must prepare a verified local model.")
+        require(startPrepare == .ready, "Start-time rolling prepare must reuse the warm engine.")
+        require(factory.modelDirectories() == [verifiedDirectory], "Warm rolling adapter must not rebuild the engine at recording start.")
+        require(factory.prepareCount() == 1, "Warm rolling adapter must not prepare WhisperKit twice when already warm.")
+        require(hypothesis?.text == "готовый warm runtime", "Warm rolling adapter must remain usable after reused prepare.")
+    }
+
+    private static func checkWhisperKitRollingAdapterKeepsWarmEngineAfterStopWhenConfigured() async {
+        let verifiedDirectory = URL(fileURLWithPath: "/tmp/Meeting007VerifiedWarmStopModel", isDirectory: true)
+        let provider = FakeLocalSTTModelPathProvider(result: .ready(verifiedDirectory))
+        let factory = WhisperKitRollingEngineFactorySpy(result: "runtime пережил stop")
+        let adapter = WhisperKitRollingWindowTranscriber(
+            modelPathProvider: provider,
+            keepsEngineWarmAfterStop: true,
+            engineFactory: factory.makeEngine(modelDirectory:)
+        )
+
+        let prewarm = await adapter.prepare()
+        await adapter.stop()
+        let nextStart = await adapter.prepare()
+        let hypothesis = try? await adapter.transcribe(window: makeRollingWindow(startedAt: 2, duration: 1), prompt: "")
+
+        require(prewarm == .ready, "Warm-stop check must start from a prepared local engine.")
+        require(nextStart == .ready, "Warm rolling adapter must remain ready after session stop when configured.")
+        require(factory.modelDirectories() == [verifiedDirectory], "Session stop must not rebuild a kept-warm rolling engine.")
+        require(factory.prepareCount() == 1, "Session stop must not destroy a kept-warm rolling runtime.")
+        require(hypothesis?.text == "runtime пережил stop", "Kept-warm rolling adapter must decode after session stop and next prepare.")
+    }
+
     private static func checkWhisperKitRollingAdapterDoesNotBuildEngineForMissingModelDirectory() async {
         let provider = FakeLocalSTTModelPathProvider(result: .unavailable(.missing))
         let factory = WhisperKitRollingEngineFactorySpy(result: "не должен вызываться")
@@ -205,6 +251,43 @@ struct Meeting007WhisperKitChecks {
         require(received.first?.prompt == "предыдущий подтвержденный текст", "Rolling adapter must forward committed transcript prompt to the engine.")
         require(hypothesis?.windowStartedAt == 8, "Rolling adapter must keep window start timing.")
         require(hypothesis?.windowEndedAt == 11, "Rolling adapter must keep window end timing.")
+    }
+
+    private static func checkWhisperKitRollingAdapterDisablesWordTimestampsForLiveDecode() async {
+        let engine = RecordingRollingWhisperKitEngine(result: "быстрый live decode")
+        let adapter = WhisperKitRollingWindowTranscriber(decodeEngine: engine)
+
+        let start = await adapter.prepare()
+        _ = try? await adapter.transcribe(window: makeRollingWindow(startedAt: 1, duration: 3), prompt: "")
+        let received = await engine.receivedRequests()
+
+        require(start == .ready, "Rolling decode engine must allow adapter start.")
+        require(received.first?.requiresWordTimestamps == false, "Live rolling decode must not request word timestamps that the UI does not use.")
+    }
+
+    private static func checkWhisperKitRollingAdapterSerializesRuntimeDecode() async {
+        let engine = BlockingRollingWhisperKitEngine()
+        let adapter = WhisperKitRollingWindowTranscriber(decodeEngine: engine)
+        _ = await adapter.prepare()
+
+        let first = Task {
+            try? await adapter.transcribe(window: makeRollingWindow(startedAt: 0, duration: 1), prompt: "")
+        }
+        await engine.waitForCallCount(1)
+        let second = Task {
+            try? await adapter.transcribe(window: makeRollingWindow(startedAt: 1, duration: 1), prompt: "")
+        }
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+
+        let blockedCallCount = await engine.recordedCallCount()
+        require(blockedCallCount == 1, "WhisperKit adapter must not enter one runtime concurrently while a decode is blocked.")
+        await engine.releaseFirstCall()
+        _ = await first.value
+        _ = await second.value
+        let maximumActive = await engine.recordedMaximumActiveCount()
+        require(maximumActive == 1, "WhisperKit runtime decode concurrency must remain one across concurrent callers.")
     }
 
     private static func checkWhisperKitRollingRuntimeFailureIsReported() async {
@@ -371,7 +454,7 @@ private final class WhisperKitRollingEngineFactorySpy: @unchecked Sendable {
         self.result = result
     }
 
-    func makeEngine(modelDirectory: URL) -> any WhisperKitRollingWindowEngine {
+    func makeEngine(modelDirectory: URL) -> any WhisperKitRollingDecodeEngine {
         lock.lock()
         directories.append(modelDirectory)
         lock.unlock()
@@ -399,11 +482,12 @@ private final class WhisperKitRollingEngineFactorySpy: @unchecked Sendable {
     }
 }
 
-private actor RecordingRollingWhisperKitEngine: WhisperKitRollingWindowEngine {
+private actor RecordingRollingWhisperKitEngine: WhisperKitRollingWindowEngine, WhisperKitRollingDecodeEngine {
     struct Request: Equatable {
         let window: RollingAudioWindow
         let language: String
         let prompt: String
+        let requiresWordTimestamps: Bool
     }
 
     private let result: String
@@ -419,8 +503,10 @@ private actor RecordingRollingWhisperKitEngine: WhisperKitRollingWindowEngine {
         onPrepare?()
     }
 
+    func stop() async {}
+
     func transcribe(window: RollingAudioWindow, language: String, prompt: String) async throws -> RollingTranscriptionHypothesis {
-        requests.append(Request(window: window, language: language, prompt: prompt))
+        requests.append(Request(window: window, language: language, prompt: prompt, requiresWordTimestamps: false))
         return RollingTranscriptionHypothesis(
             text: result,
             windowStartedAt: window.startedAt,
@@ -428,8 +514,79 @@ private actor RecordingRollingWhisperKitEngine: WhisperKitRollingWindowEngine {
         )
     }
 
+    func transcribe(request: WhisperKitRollingDecodeRequest) async throws -> RollingTranscriptionHypothesis {
+        requests.append(Request(
+            window: request.window,
+            language: request.language,
+            prompt: request.prompt,
+            requiresWordTimestamps: request.requiresWordTimestamps
+        ))
+        return RollingTranscriptionHypothesis(
+            text: result,
+            windowStartedAt: request.window.startedAt,
+            windowEndedAt: request.window.startedAt + request.window.duration
+        )
+    }
+
     func receivedRequests() -> [Request] {
         requests
+    }
+}
+
+private actor BlockingRollingWhisperKitEngine: WhisperKitRollingDecodeEngine {
+    private var callCount = 0
+    private var activeCount = 0
+    private var maximumActiveCount = 0
+    private var firstCallContinuation: CheckedContinuation<Void, Never>?
+    private var callWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+
+    func transcribe(request: WhisperKitRollingDecodeRequest) async throws -> RollingTranscriptionHypothesis {
+        callCount += 1
+        activeCount += 1
+        maximumActiveCount = max(maximumActiveCount, activeCount)
+        let currentCall = callCount
+        resumeSatisfiedWaiters()
+        if currentCall == 1 {
+            await withCheckedContinuation { continuation in
+                firstCallContinuation = continuation
+            }
+        }
+        activeCount -= 1
+        return RollingTranscriptionHypothesis(
+            text: "serialized \(currentCall)",
+            windowStartedAt: request.window.startedAt,
+            windowEndedAt: request.window.startedAt + request.window.duration
+        )
+    }
+
+    func waitForCallCount(_ expected: Int) async {
+        guard callCount < expected else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            callWaiters.append((expected, continuation))
+        }
+    }
+
+    func releaseFirstCall() {
+        firstCallContinuation?.resume()
+        firstCallContinuation = nil
+    }
+
+    func recordedCallCount() -> Int {
+        callCount
+    }
+
+    func recordedMaximumActiveCount() -> Int {
+        maximumActiveCount
+    }
+
+    private func resumeSatisfiedWaiters() {
+        let satisfied = callWaiters.filter { callCount >= $0.0 }
+        callWaiters.removeAll { callCount >= $0.0 }
+        for waiter in satisfied {
+            waiter.1.resume()
+        }
     }
 }
 

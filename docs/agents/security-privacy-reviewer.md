@@ -4,6 +4,10 @@
 
 Protect the local-first promise and prevent accidental exposure of audio, transcripts, tokens, or meeting metadata.
 
+## Communication Constraint
+
+Work quietly. Do not post progress updates, implementation narration, or intermediate reasoning unless user input, permission, or a blocker must be surfaced. Return only the final gate output required by this role.
+
 ## Responsibilities
 
 - Review changes for cloud upload paths, telemetry, remote storage, and logging leaks.
@@ -22,4 +26,3 @@ Protect the local-first promise and prevent accidental exposure of audio, transc
 ## Gate
 
 Any unresolved local-only, token, logging, raw-audio, transcript-storage, or endpoint-exposure issue blocks merge to `main`.
-

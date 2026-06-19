@@ -83,32 +83,57 @@ public struct NoopRecordingCaptureDriver: RecordingCaptureDriver {
 public struct MicrophoneRecordingCaptureDriver: RecordingCaptureDriver {
     private let microphone: any MicrophoneCaptureDriver
     private let consumer: RuntimeOnlyAudioChunkConsumer
+    private let lossResistantSession: LossResistantCaptureSession?
 
     public init(
         microphone: any MicrophoneCaptureDriver,
-        consumer: RuntimeOnlyAudioChunkConsumer = RuntimeOnlyAudioChunkConsumer()
+        consumer: RuntimeOnlyAudioChunkConsumer = RuntimeOnlyAudioChunkConsumer(),
+        lossResistantSession: LossResistantCaptureSession? = nil
     ) {
         self.microphone = microphone
         self.consumer = consumer
+        self.lossResistantSession = lossResistantSession
     }
 
     public func start(session: RecordingSession) async throws {
-        await consumer.begin(sessionID: session.id)
+        if let lossResistantSession {
+            try await lossResistantSession.begin(sessionID: session.id)
+        } else {
+            await consumer.begin(sessionID: session.id)
+        }
 
         do {
-            try await microphone.start(session: session, consumer: consumer)
+            if let lossResistantSession {
+                try await microphone.start(session: session, consumer: lossResistantSession)
+            } else {
+                try await microphone.start(session: session, consumer: consumer)
+            }
         } catch {
-            await consumer.end(sessionID: session.id)
+            if let lossResistantSession {
+                try? await lossResistantSession.close(sessionID: session.id)
+                try? await lossResistantSession.cleanup(sessionID: session.id)
+            } else {
+                await consumer.end(sessionID: session.id)
+            }
             throw error
         }
     }
 
     public func stop(sessionID: UUID) async throws {
         do {
+            await lossResistantSession?.requestStop(sessionID: sessionID)
             try await microphone.stop(sessionID: sessionID)
-            await consumer.end(sessionID: sessionID)
+            if let lossResistantSession {
+                try await lossResistantSession.close(sessionID: sessionID)
+            } else {
+                await consumer.end(sessionID: sessionID)
+            }
         } catch {
-            await consumer.end(sessionID: sessionID)
+            if let lossResistantSession {
+                try? await lossResistantSession.close(sessionID: sessionID)
+            } else {
+                await consumer.end(sessionID: sessionID)
+            }
             throw error
         }
     }

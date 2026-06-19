@@ -354,9 +354,7 @@ public struct LocalAgreementTranscriptStabilizer: Sendable {
         }
 
         previousHypothesis = normalizedHypothesis
-        let partial = normalizedHypothesis.hasPrefix(committedText)
-            ? String(normalizedHypothesis.dropFirst(committedText.count)).trimmingCharacters(in: .whitespacesAndNewlines)
-            : normalizedHypothesis
+        let partial = partialText(from: normalizedHypothesis)
 
         return StreamingTranscriptUpdate(committedText: committedText, partialText: partial)
     }
@@ -387,6 +385,75 @@ public struct LocalAgreementTranscriptStabilizer: Sendable {
             return ""
         }
         return String(text[..<lastSpace]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func partialText(from hypothesis: String) -> String {
+        guard !committedText.isEmpty else {
+            return hypothesis
+        }
+
+        if hypothesis.hasPrefix(committedText) {
+            return String(hypothesis.dropFirst(committedText.count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let committedTokens = tokenSpans(in: committedText)
+        let hypothesisTokens = tokenSpans(in: hypothesis)
+        let maximumOverlap = min(committedTokens.count, hypothesisTokens.count)
+        guard maximumOverlap > 0 else {
+            return hypothesis
+        }
+
+        for overlap in stride(from: maximumOverlap, through: 1, by: -1) {
+            let committedSuffix = committedTokens.suffix(overlap).map(\.normalized)
+            let hypothesisPrefix = hypothesisTokens.prefix(overlap).map(\.normalized)
+            guard Array(committedSuffix) == Array(hypothesisPrefix) else {
+                continue
+            }
+
+            let endIndex = hypothesisTokens[overlap - 1].range.upperBound
+            return String(hypothesis[endIndex...])
+                .trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+        }
+
+        return hypothesis
+    }
+
+    private func tokenSpans(in text: String) -> [(normalized: String, range: Range<String.Index>)] {
+        var spans: [(normalized: String, range: Range<String.Index>)] = []
+        var tokenStart: String.Index?
+        var index = text.startIndex
+
+        while index < text.endIndex {
+            let character = text[index]
+            if character.isLetter || character.isNumber {
+                tokenStart = tokenStart ?? index
+            } else if let start = tokenStart {
+                appendToken(in: text, range: start..<index, to: &spans)
+                tokenStart = nil
+            }
+            index = text.index(after: index)
+        }
+
+        if let start = tokenStart {
+            appendToken(in: text, range: start..<text.endIndex, to: &spans)
+        }
+
+        return spans
+    }
+
+    private func appendToken(
+        in text: String,
+        range: Range<String.Index>,
+        to spans: inout [(normalized: String, range: Range<String.Index>)]
+    ) {
+        let token = String(text[range])
+            .lowercased()
+            .replacingOccurrences(of: "ё", with: "е")
+        guard !token.isEmpty else {
+            return
+        }
+        spans.append((normalized: token, range: range))
     }
 }
 
@@ -495,6 +562,7 @@ public actor RollingStreamingTranscriptionSession {
 
     private let sessionID: UUID
     private let lane: CaptureLane
+    private let initialWindowDuration: TimeInterval
     private let windowDuration: TimeInterval
     private let decoder: any RollingWindowTranscribing
     private var buffer: RollingAudioBuffer
@@ -509,11 +577,13 @@ public actor RollingStreamingTranscriptionSession {
         sessionID: UUID,
         lane: CaptureLane = .mic,
         bufferDuration: TimeInterval = 30,
+        initialWindowDuration: TimeInterval? = nil,
         windowDuration: TimeInterval = 20,
         decoder: any RollingWindowTranscribing
     ) {
         self.sessionID = sessionID
         self.lane = lane
+        self.initialWindowDuration = max(initialWindowDuration ?? windowDuration, 0)
         self.windowDuration = windowDuration
         self.decoder = decoder
         self.buffer = RollingAudioBuffer(capacityDuration: bufferDuration)
@@ -528,7 +598,7 @@ public actor RollingStreamingTranscriptionSession {
     }
 
     public func tick() async throws -> StreamingTranscriptUpdate {
-        guard let window = buffer.recentWindow(sessionID: sessionID, lane: lane, duration: windowDuration) else {
+        guard let window = buffer.recentWindow(sessionID: sessionID, lane: lane, duration: decodeWindowDuration()) else {
             return lastUpdate
         }
 
@@ -555,7 +625,7 @@ public actor RollingStreamingTranscriptionSession {
             return .skippedNoNewAudio
         }
 
-        guard let window = buffer.recentWindow(sessionID: sessionID, lane: lane, duration: windowDuration) else {
+        guard let window = buffer.recentWindow(sessionID: sessionID, lane: lane, duration: decodeWindowDuration()) else {
             return .skippedNoNewAudio
         }
 
@@ -630,12 +700,45 @@ public actor RollingStreamingTranscriptionSession {
             bestVisibleDraft = visibleText
         }
     }
+
+    private func decodeWindowDuration() -> TimeInterval {
+        latestDecodedAudioEndTime == 0 ? initialWindowDuration : windowDuration
+    }
 }
 
 public actor RollingLocalTranscriptionPipeline: AudioChunkConsumer {
+    public struct StopResult: Equatable, Sendable {
+        public let segments: [TranscriptSegment]
+        public let finalizedCompleteAudio: Bool
+
+        public init(segments: [TranscriptSegment], finalizedCompleteAudio: Bool) {
+            self.segments = segments
+            self.finalizedCompleteAudio = finalizedCompleteAudio
+        }
+    }
+
+    private struct ChunkIdentity: Hashable {
+        let lane: String
+        let startedAt: UInt64
+        let duration: UInt64
+        let byteCount: Int
+    }
+
+    private struct LiveDecodeWork {
+        let token: UUID
+        let generation: Int
+        let task: Task<Result<StreamingTranscriptUpdate, TranscriptionFailure>, Never>
+    }
+
+    private enum FinalizationInput: Sendable {
+        case chunks([CapturedAudioChunk])
+        case spool(any CaptureSessionSpooling)
+    }
+
     private let decoder: any RollingWindowTranscribing
     private let lifecycle: (any RollingTranscriptionLifecycle)?
     private let bufferDuration: TimeInterval
+    private let initialWindowDuration: TimeInterval
     private let windowDuration: TimeInterval
     private let stopFinalDecodeTimeoutNanoseconds: UInt64
     private var activeConfig: STTSessionConfig?
@@ -646,22 +749,49 @@ public actor RollingLocalTranscriptionPipeline: AudioChunkConsumer {
     private var partialSegment: TranscriptSegment?
     private var latestAudioEndTime: TimeInterval = 0
     private var runtimeFailure: TranscriptionFailure?
+    private var acceptedChunks: Set<ChunkIdentity> = []
+    private var generation = 0
+    private var acceptsLiveTicks = false
+    private var pendingLiveTick = false
+    private var activeLiveDecode: LiveDecodeWork?
+    private var isFinalizingSession = false
 
     public init(
         decoder: any RollingWindowTranscribing,
         lifecycle: (any RollingTranscriptionLifecycle)? = nil,
         bufferDuration: TimeInterval = 30,
+        initialWindowDuration: TimeInterval? = nil,
         windowDuration: TimeInterval = 20,
         stopFinalDecodeTimeout: TimeInterval = 5
     ) {
         self.decoder = decoder
         self.lifecycle = lifecycle
         self.bufferDuration = bufferDuration
+        self.initialWindowDuration = max(initialWindowDuration ?? windowDuration, 0)
         self.windowDuration = windowDuration
         self.stopFinalDecodeTimeoutNanoseconds = UInt64(max(0, stopFinalDecodeTimeout) * 1_000_000_000)
     }
 
+    public func prewarm() async -> TranscriptionStartResult {
+        guard let lifecycle else {
+            return .ready
+        }
+
+        let startResult = await lifecycle.prepare()
+        if case let .unavailable(failure) = startResult {
+            runtimeFailure = failure
+        } else {
+            runtimeFailure = nil
+        }
+        return startResult
+    }
+
     public func start(_ config: STTSessionConfig) async -> TranscriptionStartResult {
+        generation += 1
+        acceptsLiveTicks = false
+        pendingLiveTick = false
+        activeLiveDecode = nil
+        isFinalizingSession = false
         if let lifecycle {
             let startResult = await lifecycle.prepare()
             guard startResult == .ready else {
@@ -679,6 +809,7 @@ public actor RollingLocalTranscriptionPipeline: AudioChunkConsumer {
             sessionID: config.sessionID,
             lane: config.lane,
             bufferDuration: bufferDuration,
+            initialWindowDuration: initialWindowDuration,
             windowDuration: windowDuration,
             decoder: decoder
         )
@@ -687,7 +818,9 @@ public actor RollingLocalTranscriptionPipeline: AudioChunkConsumer {
         committedSegment = nil
         partialSegment = nil
         latestAudioEndTime = 0
+        acceptedChunks.removeAll()
         runtimeFailure = nil
+        acceptsLiveTicks = true
         return .ready
     }
 
@@ -698,49 +831,124 @@ public actor RollingLocalTranscriptionPipeline: AudioChunkConsumer {
             return
         }
 
-        let chunkEndTime = chunk.startedAt + chunk.duration
-        guard chunkEndTime > latestAudioEndTime + 0.001 else {
+        let identity = ChunkIdentity(
+            lane: chunk.lane.rawValue,
+            startedAt: chunk.startedAt.bitPattern,
+            duration: chunk.duration.bitPattern,
+            byteCount: chunk.byteCount
+        )
+        guard acceptedChunks.insert(identity).inserted else {
             return
         }
 
+        let chunkEndTime = chunk.startedAt + chunk.duration
         latestAudioEndTime = max(latestAudioEndTime, chunkEndTime)
         await session?.receive(chunk)
     }
 
     @discardableResult
     public func tick() async -> [TranscriptSegment] {
-        guard let activeConfig, let session else {
+        guard acceptsLiveTicks, let activeConfig, let session else {
             return visibleSegments()
         }
 
-        do {
-            let update = try await session.tick()
-            apply(update, config: activeConfig, stateForCommitted: .final)
-        } catch {
-            runtimeFailure = TranscriptionFailure(
-                code: "local_stt_runtime_failed",
-                message: "Local rolling transcription stopped unexpectedly."
-            )
+        if activeLiveDecode != nil {
+            pendingLiveTick = true
+            return visibleSegments()
         }
+
+        repeat {
+            pendingLiveTick = false
+            let work = makeLiveDecodeWork(session: session)
+            activeLiveDecode = work
+            let result = await work.task.value
+            finishLiveDecode(work, result: result, config: activeConfig)
+        } while acceptsLiveTicks && pendingLiveTick && activeConfig.sessionID == self.activeConfig?.sessionID
 
         return visibleSegments()
     }
 
     @discardableResult
     public func stop(sessionID: UUID) async -> [TranscriptSegment] {
+        let result = await stop(sessionID: sessionID, finalizationInput: nil)
+        return result.segments
+    }
+
+    public func stop(
+        sessionID: UUID,
+        finalizationChunks: [CapturedAudioChunk]?
+    ) async -> StopResult {
+        await stop(
+            sessionID: sessionID,
+            finalizationInput: finalizationChunks.map(FinalizationInput.chunks)
+        )
+    }
+
+    public func stop(
+        sessionID: UUID,
+        finalizationSpool: any CaptureSessionSpooling
+    ) async -> StopResult {
+        await stop(sessionID: sessionID, finalizationInput: .spool(finalizationSpool))
+    }
+
+    private func stop(
+        sessionID: UUID,
+        finalizationInput: FinalizationInput?
+    ) async -> StopResult {
         guard activeConfig?.sessionID == sessionID else {
-            return visibleSegments()
+            return StopResult(segments: visibleSegments(), finalizedCompleteAudio: false)
         }
 
-        if let config = activeConfig,
-           let session {
+        acceptsLiveTicks = false
+        pendingLiveTick = false
+        isFinalizingSession = true
+
+        if let work = activeLiveDecode {
+            let result = await work.task.value
+            if let config = activeConfig {
+                finishLiveDecode(work, result: result, config: config)
+            }
+        }
+
+        var finalizedSegments: [TranscriptSegment]?
+        if let finalizationInput {
             do {
-                _ = try await session.tickIfAudioAdvanced(timeoutNanoseconds: stopFinalDecodeTimeoutNanoseconds)
+                let finalizer = SpoolTranscriptFinalizer(decoder: decoder)
+                let result: SpoolTranscriptionFinalizationResult
+                switch finalizationInput {
+                case .chunks(let chunks):
+                    result = try await finalizer.finalize(sessionID: sessionID, chunks: chunks)
+                case .spool(let spool):
+                    result = try await finalizer.finalize(sessionID: sessionID, spool: spool)
+                }
+                guard result.processedFrameCount == 0 || !result.segments.isEmpty else {
+                    throw TranscriptionFailure(
+                        code: "local_stt_empty_finalization",
+                        message: "Captured audio is saved locally, but no final transcript was produced."
+                    )
+                }
+                finalizedSegments = result.segments
+                runtimeFailure = nil
             } catch {
                 runtimeFailure = TranscriptionFailure(
-                    code: "local_stt_runtime_failed",
-                    message: "Local rolling transcription stopped unexpectedly."
+                    code: "local_stt_finalization_failed",
+                    message: "Captured audio is saved locally, but transcription could not be finalized."
                 )
+            }
+        }
+
+        if finalizedSegments == nil,
+           let config = activeConfig,
+           let session {
+            if case nil = finalizationInput {
+                do {
+                    _ = try await session.tickIfAudioAdvanced(timeoutNanoseconds: stopFinalDecodeTimeoutNanoseconds)
+                } catch {
+                    runtimeFailure = TranscriptionFailure(
+                        code: "local_stt_runtime_failed",
+                        message: "Local rolling transcription stopped unexpectedly."
+                    )
+                }
             }
 
             let finalUpdate = await session.finalizeBestEffortDraft()
@@ -752,7 +960,14 @@ public actor RollingLocalTranscriptionPipeline: AudioChunkConsumer {
         await lifecycle?.stop()
         activeConfig = nil
         session = nil
-        return visibleSegments()
+        acceptedChunks.removeAll()
+        activeLiveDecode = nil
+        generation += 1
+        isFinalizingSession = false
+        return StopResult(
+            segments: finalizedSegments ?? visibleSegments(),
+            finalizedCompleteAudio: finalizedSegments != nil
+        )
     }
 
     public func visibleSegments() -> [TranscriptSegment] {
@@ -765,10 +980,17 @@ public actor RollingLocalTranscriptionPipeline: AudioChunkConsumer {
     }
 
     public func lastFailure() async -> TranscriptionFailure? {
+        if let runtimeFailure {
+            return runtimeFailure
+        }
         if let lifecycleFailure = await lifecycle?.lastFailure() {
             return lifecycleFailure
         }
-        return runtimeFailure
+        return nil
+    }
+
+    public func isFinalizing() -> Bool {
+        isFinalizingSession
     }
 
     private func apply(
@@ -800,6 +1022,66 @@ public actor RollingLocalTranscriptionPipeline: AudioChunkConsumer {
                 startTime: endTime,
                 endTime: endTime,
                 text: update.partialText
+            )
+        }
+    }
+
+    private func applyLive(_ update: StreamingTranscriptUpdate, config: STTSessionConfig) {
+        committedSegment = nil
+        let text = update.visibleText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            partialSegment = nil
+            return
+        }
+        partialSegment = TranscriptSegment(
+            id: partialSegmentID,
+            meetingID: config.sessionID,
+            lane: speakerLane(for: config.lane),
+            state: .partial,
+            startTime: 0,
+            endTime: max(latestAudioEndTime, 0.1),
+            text: text
+        )
+    }
+
+    private func makeLiveDecodeWork(session: RollingStreamingTranscriptionSession) -> LiveDecodeWork {
+        let token = UUID()
+        let currentGeneration = generation
+        return LiveDecodeWork(
+            token: token,
+            generation: currentGeneration,
+            task: Task {
+                do {
+                    return .success(try await session.tickIfAudioAdvanced())
+                } catch {
+                    return .failure(TranscriptionFailure(
+                        code: "local_stt_runtime_failed",
+                        message: "Local rolling transcription stopped unexpectedly."
+                    ))
+                }
+            }
+        )
+    }
+
+    private func finishLiveDecode(
+        _ work: LiveDecodeWork,
+        result: Result<StreamingTranscriptUpdate, TranscriptionFailure>,
+        config: STTSessionConfig
+    ) {
+        guard activeLiveDecode?.token == work.token,
+              work.generation == generation,
+              activeConfig?.sessionID == config.sessionID else {
+            return
+        }
+        activeLiveDecode = nil
+        switch result {
+        case .success(let update):
+            applyLive(update, config: config)
+            runtimeFailure = nil
+        case .failure:
+            runtimeFailure = TranscriptionFailure(
+                code: "local_stt_runtime_failed",
+                message: "Local rolling transcription stopped unexpectedly."
             )
         }
     }

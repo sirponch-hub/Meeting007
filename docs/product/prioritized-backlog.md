@@ -13,6 +13,36 @@ This backlog orders v1 work by user value and risk reduction. The first mileston
 
 Goal: user can start a local recording, get transcript segments, copy recent context, stop, and receive a final Markdown transcript.
 
+Updated priority decision: the current single rolling WhisperKit path is not sufficient for the product bar. The P0 core loop must be rebuilt around a capture-first, loss-resistant local ASR pipeline before more UI convenience or calendar work.
+
+Next required implementation slices:
+
+1. **Local capture session spool and latency markers.**
+   - Capture starts immediately on Start.
+   - Every audio chunk gets lane, sequence, sample-start, and sample-end metadata.
+   - A temporary local session spool preserves captured audio until final transcript completion.
+   - Development/QA markers record start pressed, first audio frame, live worker ready, first partial, stop pressed, capture stopped, finalization started, and finalization completed or failed.
+
+2. **Stop/finalization decoupling.**
+   - Stop closes capture promptly and never waits indefinitely for transcription.
+   - Final transcript reconciliation runs as a separate local finalizer over the captured session spool.
+   - If finalization misses its deadline, the app preserves the local spool and shows a recoverable finalization state instead of hanging or discarding data.
+
+3. **Push-driven live transcription worker.**
+   - Live transcription receives ordered audio frames or small speech frames as input instead of polling a rolling window timer.
+   - Live transcript text is always draft until committed/finalized.
+   - The first visible partial target is 0.5-1.5 seconds after speech begins when the local worker is warm.
+
+4. **Segment state machine with sample offsets.**
+   - Segments move through `partial`, `committed`, and `final` states.
+   - Segment replacement and reconciliation use sample offsets, not UI string-prefix heuristics.
+   - Live partial text cannot duplicate committed/final text for the same audio range.
+
+5. **Model split decision.**
+   - Use a fast local live path for low-latency drafts.
+   - Use a separate local final path for quality and tail recovery.
+   - A single heavy rolling decode must not be the only mechanism for live, stable, and final transcript output.
+
 First implementation slice: manual recording-session shell from the main app window. It intentionally uses a no-op capture driver and does not capture real audio yet.
 
 Second implementation slice: live transcript placeholder during recording. It uses local static Russian mock segments to demonstrate `Me`/`Others` and partial/final states without real STT or audio capture.
@@ -43,6 +73,11 @@ Definition of done:
 - Manual start/stop works from the main app window on Apple Silicon.
 - Mic and system-audio lanes can be represented as `Me` and `Others`.
 - Russian is the default transcription path.
+- Capture starts immediately and is independent of local STT readiness.
+- Temporary local audio spool prevents lost speech before finalization and is deleted after successful final transcript completion unless a future explicit retention setting changes this.
+- Live transcript drafts appear from the push-driven live worker without waiting for final reconciliation.
+- Stop closes capture promptly and finalization cannot hang the recording controls.
+- Final transcript reconciliation can recover the captured tail from the local spool.
 - Stop creates a completed-session snapshot visible in the app for the current app run.
 - Copy Last 5 Minutes works while recording.
 - Stop creates a Markdown transcript.
@@ -176,7 +211,8 @@ Why P2:
 Definition of done:
 
 - User can delete a meeting transcript and index entry.
-- Raw audio retention policy is explicit in settings before persistent audio storage ships.
+- Raw audio retention policy is explicit in settings before user-retained persistent audio storage ships.
+- Temporary raw audio spools created for loss-resistant finalization are local-only, hidden from transcript/API surfaces, and automatically removed after successful finalization.
 - User can recover when the selected Markdown folder is missing or not writable.
 - User can recover from partial Markdown migration without losing transcript files.
 - Unsupported hardware, missing local model, denied permission, and capture failure have clear user-facing recovery paths.
@@ -203,25 +239,28 @@ Why P3:
 
 ## Recommended Build Order
 
-1. Transcript/storage core: segments, meeting metadata, Markdown, SQLite contract, copy windows.
-2. Manual recording shell: main-window start/stop state, visible recording UX, placeholder/fake transcript source.
-3. Local audio capture: microphone and system-audio lanes.
-4. Local Russian STT: model install path, VAD chunking, partial/final segment pipeline.
-5. Finalization: stop flow, Markdown write, SQLite index update.
-6. First-run, permissions UX, and configurable Markdown transcript folder.
-7. Markdown transcript migration for existing files.
-8. Meeting history, full transcript copy, hotkey/menu bar convenience controls.
-9. Local REST API.
-10. Local MCP server.
-11. Google Calendar MVP: title/topic and participants.
-12. Calendar enhancements: today's meetings, start-from-meeting, Notification Center reminders.
-13. Data controls and recovery UX hardening.
+1. Loss-resistant local ASR foundation: capture session spool, ordered audio chunk metadata, local-only temporary retention, latency markers.
+2. Stop/finalizer separation: prompt capture stop, asynchronous final reconciliation, recoverable finalization state, spool cleanup.
+3. Push-driven live transcription worker: warm local live path, first partial target, draft-only live segments.
+4. Segment state machine: sample-offset-based `partial`/`committed`/`final` transitions, no duplicate text across overlapping audio ranges.
+5. Model strategy: fast live model/path plus separate quality finalizer path, Russian benchmark threshold.
+6. Transcript/storage core: meeting metadata, Markdown, SQLite contract, copy windows.
+7. Manual recording shell and visible recording UX hardening around the new pipeline.
+8. Local audio capture expansion: microphone and system-audio lanes through the new spool contract.
+9. First-run, permissions UX, and configurable Markdown transcript folder.
+10. Markdown transcript migration for existing files.
+11. Meeting history, full transcript copy, hotkey/menu bar convenience controls.
+12. Local REST API.
+13. Local MCP server.
+14. Google Calendar MVP: title/topic and participants.
+15. Calendar enhancements: today's meetings, start-from-meeting, Notification Center reminders.
+16. Data controls and recovery UX hardening.
 
 ## Parallel Workstreams
 
 The backlog can run in parallel after the transcript/storage contract is stable:
 
 - UX workstream: first-run, recording screen, transcript view, copy controls, history.
-- Capture/STT workstream: mic/system capture, VAD, local model, Russian benchmarks.
+- Capture/STT workstream: capture session spool, live worker, finalizer, local model strategy, Russian benchmarks.
 - Storage/API workstream: Markdown, SQLite, REST, MCP.
 - QA/privacy workstream: permissions, local-only verification, manual meeting-app checklist.

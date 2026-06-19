@@ -4,6 +4,10 @@
 
 Verify that independently implemented parts work together and local-only guarantees still hold.
 
+## Communication Constraint
+
+Work quietly. Do not post progress updates, implementation narration, or intermediate reasoning unless user input, permission, or a blocker must be surfaced. Return only the final gate output required by this role.
+
 ## Responsibilities
 
 - Run automated checks.
@@ -29,4 +33,3 @@ Verify that independently implemented parts work together and local-only guarant
 ## Gate
 
 Branch can move to BA acceptance only when relevant integration tests pass and manual QA gaps are documented.
-
